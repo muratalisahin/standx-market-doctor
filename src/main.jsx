@@ -465,6 +465,9 @@ function App(){
  const prevSymbolRef=useRef("");
  const klineAtRef=useRef(0);
  const selectedHold=useRef(null);
+ const cacheRef=useRef({klines:{},tv:{},detail:{}});
+ const reqRef=useRef(0);
+ const [klinesSym,setKlinesSym]=useState("");
  async function getOverview(){
   const r=await fetch(marketUrl(),{cache:"no-store"}); if(!r.ok)throw Error(); return r.json();
  }
@@ -542,13 +545,21 @@ function App(){
      setOverview(o);
      setErr("");
     }
-    if(d&&d.a?.symbol===symbolRef.current)setDetail(d);
+    if(d&&current===symbolRef.current){
+     cacheRef.current.detail[current]=d;
+     setDetail(d);
+    }
     if(current&&Date.now()-klineAtRef.current>20000){
      klineAtRef.current=Date.now();
      const [bars,tv]=await Promise.all([loadAllKlines(current,true),getTv(current)]);
      if(!stop&&symbolRef.current===current){
-      setKlines(prev=>mergeKlineState(prev,bars));
-      if(tv)setTvQuote(tv);
+      setKlines(prev=>{
+       const merged=mergeKlineState(prev,bars);
+       cacheRef.current.klines[current]=merged;
+       return merged;
+      });
+      setKlinesSym(current);
+      if(tv){cacheRef.current.tv[current]=tv;setTvQuote(tv);}
      }
     }
    }catch{}
@@ -563,12 +574,46 @@ function App(){
  useEffect(()=>{
   if(!symbol)return;
   const switched=!!(prevSymbolRef.current&&prevSymbolRef.current!==symbol);
-  if(switched){setEntryInput("");setPlan(null);setKlines({});setTvQuote(null);}
   prevSymbolRef.current=symbol;
+  const cache=cacheRef.current;
+  if(switched){
+   setEntryInput("");
+   setPlan(null);
+   if(cache.klines[symbol]){setKlines(cache.klines[symbol]);setKlinesSym(symbol);}
+   else setKlinesSym("");
+   if(cache.tv[symbol])setTvQuote(cache.tv[symbol]);
+   if(cache.detail[symbol])setDetail(cache.detail[symbol]);
+  }
+  const req=++reqRef.current;
   let stop=false;
-  getDetail(symbol).then(d=>{if(!stop&&d.a?.symbol===symbolRef.current)setDetail(d)}).catch(()=>{});
-  loadAllKlines(symbol).then(bars=>{if(!stop&&symbolRef.current===symbol){klineAtRef.current=Date.now();setKlines(bars);}}).catch(()=>{});
-  getTv(symbol).then(tv=>{if(!stop&&symbolRef.current===symbol&&tv)setTvQuote(tv)}).catch(()=>{});
+  getDetail(symbol).then(d=>{
+   if(stop||req!==reqRef.current)return;
+   cache.detail[symbol]=d;
+   setDetail(d);
+  }).catch(()=>{});
+  (async()=>{
+   try{
+    const recent=await loadAllKlines(symbol,true);
+    if(stop||req!==reqRef.current)return;
+    setKlines(prev=>{
+     const merged=cache.klines[symbol]?mergeKlineState(cache.klines[symbol],recent):recent;
+     cache.klines[symbol]=merged;
+     return merged;
+    });
+    setKlinesSym(symbol);
+    klineAtRef.current=Date.now();
+    const full=await loadAllKlines(symbol,false);
+    if(stop||req!==reqRef.current)return;
+    cache.klines[symbol]=full;
+    setKlines(full);
+    setKlinesSym(symbol);
+   }catch{}
+  })();
+  getTv(symbol).then(tv=>{
+   if(stop||req!==reqRef.current||!tv)return;
+   cache.tv[symbol]=tv;
+   setTvQuote(tv);
+  }).catch(()=>{});
   return()=>{stop=true};
  },[symbol]);
  const liveDetail=detail?.a?.symbol===symbol?detail:null;
@@ -594,15 +639,17 @@ function App(){
  const bidWall=clusterWall(book?.bids,price,"bid");
  const askWall=clusterWall(book?.asks,price,"ask");
  const tfMeta=TFS.find(t=>t.id===tf)||TFS[1];
+ const tvOk=tvQuote&&TV_MAP[symbol]===tvQuote.ticker;
+ const klinesOk=klinesSym===symbol;
  const tfMap=useMemo(()=>{
   const out={};
   for(const t of TFS){
-   const fromTv=tvLevels(tvQuote?.data,TV_TF[t.id],price);
-   const fromBars=structureLevels(klines[t.id],price,t.tol);
+   const fromTv=tvOk?tvLevels(tvQuote?.data,TV_TF[t.id],price):null;
+   const fromBars=klinesOk?structureLevels(klines[t.id],price,t.tol):null;
    out[t.id]=pickSR(fromTv,fromBars,price,t);
   }
   return out;
- },[klines,price,tvQuote]);
+ },[klines,klinesOk,price,tvQuote,tvOk]);
  const structured=tfMap[tf];
  const dayLow=Number(market.low_price_24h||0), dayHigh=Number(market.high_price_24h||0);
  const support=structured?.support||(bidWall?.price<price?bidWall.price:null)||(dayLow&&dayLow<price?dayLow:null)||null;
@@ -806,7 +853,7 @@ return <main>
           {TFS.map(t=><button type="button" key={t.id} className={tf===t.id?"on":""} onClick={()=>setTf(t.id)}>{t.label}</button>)}
         </div>
         {structured?.atLevel&&<p className="atLevel">Price is testing {srTitle(structured.atLevel.name,"sup")} at {px(structured.atLevel.price)} — that is mark, not support.</p>}
-        <div className="levels">
+        <div className={`levels ${klinesOk?"":"pending"}`}>
           <div>
             <span>{tfMeta.label} · {srTitle(structured?.supportName,"sup").toUpperCase()}</span>
             <b>{px(support)}</b>
