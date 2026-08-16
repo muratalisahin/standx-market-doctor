@@ -112,6 +112,10 @@ const px=v=>{
 function Stander({pose="front",className=""}){
  return <img className={`stander ${className}`} src={STANDER[pose]||STANDER.front} alt="Stander, the StandX mascot"/>;
 }
+function TradeLink({symbol}){
+ if(!symbol)return null;
+ return <a className="tradeBtn" href={`https://standx.com/perps?symbol=${encodeURIComponent(symbol)}`} target="_blank" rel="noopener noreferrer">TRADE ON STANDX</a>;
+}
 function parseKlines(j){
  if(!j||j.s!=="ok"||!Array.isArray(j.t))return [];
  return j.t.map((t,i)=>({t,o:+j.o[i],h:+j.h[i],l:+j.l[i],c:+j.c[i],v:+(j.v?.[i]||0)})).filter(c=>c.h>0&&c.l>0);
@@ -821,6 +825,7 @@ return <main>
           </label>
           <button type="button" className="calcBtn" onClick={calculateTrade}>CALCULATE</button>
         </div>
+        <TradeLink symbol={symbol||selected.symbol}/>
         {plan?<div className={`calcResult ${stale?"stale":""}`}>
           <div className="takeHead"><img src={LOGO} alt="StandX"/><span>STANDX DOCTOR DIAGNOSIS · {DISCLAIMER}</span></div>
           <p>For your <b>{plan.side.toUpperCase()} {plan.leverage}x</b> at <b>{px(plan.entry)}</b>{plan.usedLive?" (live mark)":""} · ${money(plan.sizeUsd)}, isolated liquidation is <b>{px(plan.liq)}</b>.{stale?" Recalculate to update.":""}</p>
