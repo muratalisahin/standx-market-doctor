@@ -2,7 +2,7 @@ import React,{useEffect,useMemo,useRef,useState}from"react";
 import{createRoot}from"react-dom/client";
 import{toPng}from"html-to-image";
 import"./style.css";
-const API="";
+const DISCLAIMER="Yatırım tavsiyesi değildir";
 const marketUrl=(s="") => import.meta.env.DEV
   ? (s
       ? `/standx-api/api/query_symbol_market?symbol=${encodeURIComponent(s)}`
@@ -383,13 +383,13 @@ function doctorTake({side,leverage,odds,price,support,resistance,funding,changeP
    :"You can sit the short if invalidation is a break of resistance.";
  }
  let idea;
- if(toRes<0.004) idea="Price is kissing resistance. No YTD: I would not chase a long here. Wait for rejection, or a break and retest.";
- else if(toSup<0.004) idea="Price is sitting on support. No YTD: a long is more honest here than mid-range, with a hard stop under support.";
- else if(side==="long"&&changePct>1.5&&toRes<0.012) idea="No YTD: this looks like a chase into resistance. I would not add. Take risk off or wait.";
- else if(fund>0.0002&&side==="long") idea="No YTD: funding is paying shorts. I would not sit an oversized long just because the 24h print is green.";
- else if(fund<-0.0002&&side==="short") idea="No YTD: funding is paying longs. I would not sit an oversized short into that grind.";
- else if(score>=80&&odds<30) idea="No YTD: the book is healthy enough to sit a planned position, not a bigger one. The risk is the leverage, not the headline.";
- else idea="No YTD in this call. Live range and the book do not give a strong chase. Wait for support or resistance to be tested.";
+ if(toRes<0.004) idea="Price is pressed into resistance. Do not chase a long here. Wait for rejection, or a clean break and retest.";
+ else if(toSup<0.004) idea="Price is sitting on support. A long is cleaner here than mid-range, with a hard stop under the level.";
+ else if(side==="long"&&changePct>1.5&&toRes<0.012) idea="This looks like a chase into resistance. Do not add. Take risk off, or wait for the level to decide.";
+ else if(fund>0.0002&&side==="long") idea="Funding is paying shorts. Do not sit an oversized long just because the 24h print is green.";
+ else if(fund<-0.0002&&side==="short") idea="Funding is paying longs. Do not sit an oversized short into that grind.";
+ else if(score>=80&&odds<30) idea="The book is healthy enough to sit a planned size, not a bigger one. The risk is the leverage, not the headline.";
+ else idea="Price is between levels and the book is not offering a chase. Wait for support or resistance to be tested before adding risk.";
  return {risk,sit,idea};
 }
 
@@ -545,12 +545,12 @@ function App(){
  const bookConfirmsSupport=alignWall(support,bidWall,price);
  const bookConfirmsRes=alignWall(resistanceLevel,askWall,price);
  const srSource=structured?.source;
- const srSupportNote=structured?.supportSource==="TradingView"
-  ?`TradingView ${structured.supportName||"pivot"}${tvQuote?.ticker?` · ${tvQuote.ticker}`:""}`
-  :structured?.supportName||"Waiting for levels";
- const srResNote=structured?.resistanceSource==="TradingView"
-  ?`TradingView ${structured.resistanceName||"pivot"}${tvQuote?.ticker?` · ${tvQuote.ticker}`:""}`
-  :structured?.resistanceName||"Waiting for levels";
+ const srSupportNote=structured?.supportSource
+  ?`StandX ${structured.supportName||"pivot"}`
+  :"Waiting for levels";
+ const srResNote=structured?.resistanceSource
+  ?`StandX ${structured.resistanceName||"pivot"}`
+  :"Waiting for levels";
  const typed=Number(entryInput);
  const draftEntry=typed>0?typed:price;
  const usedLive=!(typed>0);
@@ -631,7 +631,7 @@ function App(){
          <em className={cmp?.status||""}>{cmp?.headline||"Calculate to compare liq"}</em>
        </div>)}
      </div>
-     <div className="shareNote"><small>DOCTOR'S TAKE · NO YTD · 1H / 4H</small><p>{[vs1h?.headline,vs4h?.headline].filter(Boolean).join(". ")}{[vs1h?.headline||vs4h?.headline]?". ":""}{take?.idea||note}</p></div>
+     <div className="shareNote"><small>RISK ANALYSIS · {DISCLAIMER}</small><p>{[vs1h?.headline,vs4h?.headline].filter(Boolean).join(". ")}{[vs1h?.headline||vs4h?.headline]?". ":""}{take?.idea||note}</p></div>
    </div>
    <div className="shareFoot">
      <span>StandX Market Doctor</span>
@@ -667,13 +667,13 @@ return <main>
       <div className="card diagnosis"><div className="diagnosisTop"><div className="label">MARKET DIAGNOSIS</div><Stander pose="focus" className="standerFocus"/></div><h3>{status==="HEALTHY"?"Conditions look healthy.":status==="WATCH"?"Conditions need monitoring.":"Conditions need attention."}</h3><p>{score>=80?"Strong activity and market depth are supporting current conditions.":score>=60?"Several signals are mixed. Watch liquidity and positioning.":"Multiple signals are weak. Execution conditions may be less resilient."}</p><div className="facts"><span>24H VOL <b>${money(selected.volume_quote_24h)}</b></span><span>OPEN INTEREST <b>${money(selected.open_interest_notional)}</b></span></div><button className="shareBtn" onClick={()=>setShare(true)}>GENERATE DOCTOR REPORT</button></div>
       <div className="card signals"><div className="label">DIAGNOSTIC SIGNALS</div><Metric name="Liquidity" value={signals.liquidity}/><Metric name="Volume" value={signals.volume}/><Metric name="Open Interest" value={signals.oi}/><Metric name="Spread" value={signals.spread}/><Metric name="Funding" value={signals.funding}/></div>
       <div className="card whatif"><div className="label">WHAT IF?</div><h3>Liquidity shock simulator</h3><p>Explore how a change in liquidity would move the health score.</p><input type="range" min="-50" max="50" value={liq} onChange={e=>setLiq(+e.target.value)}/><div className="range"><span>-50%</span><b>{liq>0?"+":""}{liq}%</b><span>+50%</span></div><div className="sim"><span>SIMULATED HEALTH</span><strong>{sim}</strong></div></div>
-      <div className="card prescription"><div className="label">MARKET PRESCRIPTION</div>{[["Liquidity",signals.liquidity],["Volume",signals.volume],["Open Interest",signals.oi],["Spread",signals.spread],["Funding",signals.funding]].map(([x,v])=><div className="row" key={x}><span>{x}</span><b>{v>=75?"Healthy":v>=55?"Monitor":"Attention"}</b></div>)}<p className="note">Educational visualization only. Not financial advice.</p></div>
+      <div className="card prescription"><div className="label">MARKET PRESCRIPTION</div>{[["Liquidity",signals.liquidity],["Volume",signals.volume],["Open Interest",signals.oi],["Spread",signals.spread],["Funding",signals.funding]].map(([x,v])=><div className="row" key={x}><span>{x}</span><b>{v>=75?"Healthy":v>=55?"Monitor":"Attention"}</b></div>)}<p className="note">Educational visualization only. {DISCLAIMER}.</p></div>
       <div className="card desk">
         <div className="deskHead">
           <div>
             <div className="label">OPEN TRADE DESK</div>
             <h3>If you open this now</h3>
-            <p>Enter the trade, then calculate. Liquidation is for that fill, not live mark drift. TradingView 1H / 4H / daily / weekly support and resistance. No YTD.</p>
+            <p>Enter the trade, then calculate. Liquidation is for that fill, not live mark drift. StandX 1H / 4H / daily / weekly support and resistance. {DISCLAIMER}.</p>
           </div>
           <Stander pose={odds>=45?"think":"focus"} className="standerDesk"/>
         </div>
@@ -747,7 +747,7 @@ return <main>
           {TFS.map(t=>{
            const lv=tfMap[t.id];
            return <button type="button" key={t.id} className={tf===t.id?"on":""} onClick={()=>setTf(t.id)}>
-             <span>{t.label} · {lv?.source==="TradingView"?"TV":lv?.source==="StandX"?"LIVE":"—"}</span>
+             <span>{t.label} · StandX</span>
              <b><i>{srTitle(lv?.supportName,"sup")}</i> {px(lv?.support)}</b>
              <b><i>{srTitle(lv?.resistanceName,"res")}</i> {px(lv?.resistance)}</b>
            </button>;
@@ -763,7 +763,7 @@ return <main>
           {liqPos!=null&&<span className="srLiqLab" style={{left:`${Math.max(8,Math.min(92,liqPos))}%`}}>Liq</span>}
         </div>
         <div className="take">
-          <small>DOCTOR'S TAKE · NO YTD · {srSource||"LIVE"}</small>
+          <small>RISK ANALYSIS · {DISCLAIMER}</small>
           <p>{take?.idea}</p>
         </div>
       </div>
