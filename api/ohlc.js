@@ -1,6 +1,6 @@
 export default async function handler(req,res){
   const source=req.query.source, symbol=req.query.symbol, interval=req.query.interval;
-  const limit=Math.min(100,Math.max(4,Number(req.query.limit)||4));
+  const limit=Math.min(200,Math.max(4,Number(req.query.limit)||4));
   if(!source||!symbol||!interval)return res.status(400).json({error:"source, symbol and interval are required"});
   let url="";
   if(source==="binance") url=`https://api.binance.com/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&limit=${limit}`;

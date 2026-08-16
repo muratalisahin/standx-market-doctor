@@ -34,10 +34,10 @@ const TV_MAP={
  "SPCX-USD":"NASDAQ:SPCX"
 };
 const PIVOT_TFS=[
- {id:"1H",label:"1H",hint:"1H swing",kind:"swing",binance:"1h",mexc:"60m",yahoo:"1h",limit:72,hug:0.005,minSpan:0.016},
- {id:"4H",label:"4H",hint:"4H swing",kind:"swing",binance:"4h",mexc:"4h",yahoo:"1h",limit:72,hug:0.008,minSpan:0.028},
- {id:"1D",label:"Daily",hint:"Traditional",kind:"pivot",binance:"1d",mexc:"1d",yahoo:"1d",limit:4,hug:0.01,minSpan:0.035},
- {id:"1W",label:"Weekly",hint:"Traditional",kind:"pivot",binance:"1w",mexc:"1W",yahoo:"1wk",limit:4,hug:0.015,minSpan:0.055}
+ {id:"1H",label:"1H",hint:"1H swing",kind:"swing",binance:"1h",mexc:"60m",yahoo:"1h",limit:48,hug:0.004,minSpan:0.012,tol:0.0025},
+ {id:"4H",label:"4H",hint:"4H swing",kind:"swing",binance:"4h",mexc:"4h",yahoo:"1h",limit:48,hug:0.006,minSpan:0.018,tol:0.003},
+ {id:"1D",label:"Daily",hint:"Daily swing",kind:"swing",binance:"1d",mexc:"1d",yahoo:"1d",limit:40,hug:0.008,minSpan:0.028,tol:0.0035},
+ {id:"1W",label:"Weekly",hint:"Weekly swing",kind:"swing",binance:"1w",mexc:"1W",yahoo:"1wk",limit:26,hug:0.012,minSpan:0.045,tol:0.005}
 ];
 function ohlcSource(s){
  const tv=TV_MAP[s]||"";
@@ -162,28 +162,54 @@ function tvSame(a,b,price){
  const r=a.resistance&&b.resistance&&Math.abs(a.resistance-b.resistance)/price<0.00025;
  return !!(s&&r);
 }
-function uniqueLevels(rows,price){
- const out=[];
- for(const x of rows||[]){
-  if(!x||!Number.isFinite(x.price))continue;
-  if(out.some(y=>Math.abs(y.price-x.price)/price<0.0018))continue;
-  out.push(x);
- }
- return out;
-}
-function widenPair(sups,ress,price,hug,minSpan){
- const sCands=uniqueLevels(sups.filter(x=>price-x.price>=hug),price);
- const rCands=uniqueLevels(ress.filter(x=>x.price-price>=hug),price);
- let best=null;
- for(const s of sCands){
-  for(const r of rCands){
-   const span=r.price-s.price;
-   if(span<minSpan)continue;
-   if(!best||span<best.span) best={s,r,span};
+function bucketLevels(points,price,tol,keep){
+ const width=price*tol;
+ const buckets=new Map();
+ for(const p of points||[]){
+  if(!p||!Number.isFinite(p.price))continue;
+  const key=Math.round(p.price/width);
+  const g=buckets.get(key);
+  if(!g) buckets.set(key,{name:p.name,price:p.price,t:p.t||0,touches:1});
+  else{
+   g.price=keep==="min"?Math.min(g.price,p.price):Math.max(g.price,p.price);
+   g.touches+=1;
+   g.t=Math.max(g.t||0,p.t||0);
   }
  }
- if(best) return best;
- return {s:sCands[sCands.length-1]||sCands[0]||null,r:rCands[rCands.length-1]||rCands[0]||null};
+ return [...buckets.values()];
+}
+function rankLevels(groups,price,hug,spanT,lastT,side){
+ return groups
+  .filter(g=>side==="sup"?g.price<price-hug:g.price>price+hug)
+  .map(g=>{
+   const dist=Math.abs(price-g.price)/price;
+   const recency=Math.exp(-((lastT-(g.t||0))/Math.max(spanT,1))*2.2);
+   const score=(0.7+0.3*Math.min(g.touches,3)/3)*(0.35+0.65*recency)/(dist+0.01);
+   return {...g,score};
+  })
+  .sort((a,b)=>b.score-a.score);
+}
+function widenPicked(sups,ress,price,minSpan){
+ let support=sups[0]||null, resistance=ress[0]||null;
+ if(support&&resistance&&resistance.price-support.price<minSpan){
+  const tighterRes=resistance.price-price<=price-support.price;
+  if(tighterRes){
+   const nxt=ress.find(x=>x.price>resistance.price*1.004);
+   if(nxt) resistance=nxt;
+   else{
+    const ns=sups.find(x=>x.price<support.price*0.996);
+    if(ns) support=ns;
+   }
+  }else{
+   const nxt=sups.find(x=>x.price<support.price*0.996);
+   if(nxt) support=nxt;
+   else{
+    const nr=ress.find(x=>x.price>resistance.price*1.004);
+    if(nr) resistance=nr;
+   }
+  }
+ }
+ return {support,resistance};
 }
 function pivotLevels(ohlc,price,tf){
  if(!ohlc||!price)return null;
@@ -194,15 +220,13 @@ function pivotLevels(ohlc,price,tf){
  const atLevel=tvAtLevel(all,price,hug);
  const sups=all.filter(x=>x.price<price).sort((a,b)=>b.price-a.price);
  const ress=all.filter(x=>x.price>price).sort((a,b)=>a.price-b.price);
- const {s:support,r:resistance}=widenPair(sups,ress,price,hug,minSpan);
+ const {support,resistance}=widenPicked(sups,ress,price,minSpan);
  if(!support&&!resistance&&!atLevel)return null;
  return {
   support:support?.price??null,
   resistance:resistance?.price??null,
   supportName:support?.name,
   resistanceName:resistance?.name,
-  nextSupport:sups.find(x=>support&&x.price<support.price*0.997)?.price??null,
-  nextResistance:ress.find(x=>resistance&&x.price>resistance.price*1.002)?.price??null,
   atLevel:atLevel?{price:atLevel.price,name:atLevel.name,source:"TradingView"}:null,
   supportSource:support?"TradingView":null,
   resistanceSource:resistance?"TradingView":null,
@@ -212,10 +236,13 @@ function pivotLevels(ohlc,price,tf){
 function swingLevels(bars,price,tf){
  if(!bars?.length||!price)return null;
  const label=tf?.label||"Swing";
- const hug=price*(tf?.hug||0.007);
- const minSpan=price*(tf?.minSpan||0.024);
+ const hug=price*(tf?.hug||0.006);
+ const minSpan=price*(tf?.minSpan||0.02);
+ const tol=tf?.tol||0.003;
  const w=bars.length<16?1:2;
  const last=bars.length-1;
+ const lastT=bars[last].t||0;
+ const spanT=Math.max(1,lastT-(bars[0].t||0));
  const lows=[],highs=[];
  for(let i=w;i<=last-w;i++){
   let isL=true,isH=true;
@@ -226,19 +253,19 @@ function swingLevels(bars,price,tf){
   if(isL) lows.push({name:`${label} swing`,price:bars[i].l,t:bars[i].t});
   if(isH) highs.push({name:`${label} swing`,price:bars[i].h,t:bars[i].t});
  }
- const rangeLow={name:`${label} low`,price:Math.min(...bars.map(x=>x.l))};
- const rangeHigh={name:`${label} high`,price:Math.max(...bars.map(x=>x.h))};
- const sups=[...lows,rangeLow].filter(x=>x.price<price).sort((a,b)=>b.price-a.price);
- const ress=[...highs,rangeHigh].filter(x=>x.price>price).sort((a,b)=>a.price-b.price);
- const {s:support,r:resistance}=widenPair(sups,ress,price,hug,minSpan);
+ const loBar=bars.reduce((m,x)=>x.l<m.l?x:m);
+ const hiBar=bars.reduce((m,x)=>x.h>m.h?x:m);
+ lows.push({name:`${label} swing`,price:loBar.l,t:loBar.t});
+ highs.push({name:`${label} swing`,price:hiBar.h,t:hiBar.t});
+ const sups=rankLevels(bucketLevels(lows,price,tol,"min"),price,hug,spanT,lastT,"sup");
+ const ress=rankLevels(bucketLevels(highs,price,tol,"max"),price,hug,spanT,lastT,"res");
+ const {support,resistance}=widenPicked(sups,ress,price,minSpan);
  if(!support&&!resistance)return null;
  return {
   support:support?.price??null,
   resistance:resistance?.price??null,
   supportName:support?.name,
   resistanceName:resistance?.name,
-  nextSupport:sups.find(x=>support&&x.price<support.price*0.997)?.price??null,
-  nextResistance:ress.find(x=>resistance&&x.price>resistance.price*1.002)?.price??null,
   supportSource:"TradingView",
   resistanceSource:"TradingView",
   source:"TradingView"
@@ -748,11 +775,11 @@ function App(){
  const high=dayHigh;
  const bookConfirmsSupport=alignWall(support,bidWall,price);
  const bookConfirmsRes=alignWall(resistanceLevel,askWall,price);
- const srSupportNote=structured?.supportName
-  ?srTitle(structured.supportName,"sup")
+ const srSupportNote=support&&price
+  ? `${((price-support)/price*100).toFixed(2)}% below mark`
   :"Waiting for levels";
- const srResNote=structured?.resistanceName
-  ?srTitle(structured.resistanceName,"res")
+ const srResNote=resistanceLevel&&price
+  ? `${((resistanceLevel-price)/price*100).toFixed(2)}% above mark`
   :"Waiting for levels";
  const typed=Number(entryInput);
  const draftEntry=typed>0?typed:price;
@@ -889,7 +916,7 @@ return <main>
           <div>
             <div className="label">OPEN TRADE DESK</div>
             <h3>If you open this now</h3>
-            <p>Enter the trade, then calculate. Liquidation is for that fill, not live mark drift. 1H/4H use chart swings; Daily/Weekly use TradingView Traditional pivots. {DISCLAIMER}.</p>
+            <p>Enter the trade, then calculate. Liquidation is for that fill, not live mark drift. Support and resistance are chart swings on 1H, 4H, Daily and Weekly. {DISCLAIMER}.</p>
           </div>
           <Stander pose={odds>=45?"think":"focus"} className="standerDesk"/>
         </div>
@@ -951,7 +978,6 @@ return <main>
             <b>{px(support)}</b>
             <small>
               {srSupportNote}
-              {structured?.nextSupport?` · next ${px(structured.nextSupport)}`:""}
               {bookConfirmsSupport?" · bid wall confirms":""}
             </small>
           </div>
@@ -960,7 +986,6 @@ return <main>
             <b>{px(resistanceLevel)}</b>
             <small>
               {srResNote}
-              {structured?.nextResistance?` · next ${px(structured.nextResistance)}`:""}
               {bookConfirmsRes?" · ask wall confirms":""}
             </small>
           </div>
