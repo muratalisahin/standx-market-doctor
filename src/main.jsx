@@ -543,14 +543,26 @@ function App(){
   const src=ohlcSource(s);
   if(!src)return {};
   const pairs=await Promise.all(PIVOT_TFS.map(async t=>{
-   const interval=src.kind==="yahoo"?t.yahoo:src.kind==="mexc"?t.mexc:t.binance;
-   try{
-    const r=await fetch(ohlcUrl(src.kind,src.symbol,interval,t.limit),{cache:"no-store"});
-    if(!r.ok)return [t.id,null];
-    const j=await r.json();
-    if(t.kind==="swing") return [t.id,{bars:closedBars(parseBars(j))}];
-    return [t.id,parsePrevOhlc(j)];
-   }catch{return [t.id,null];}
+   const attempts=src.kind==="yahoo"
+    ?[["yahoo",src.symbol,t.yahoo]]
+    :src.kind==="mexc"
+     ?[["mexc",src.symbol,t.mexc]]
+     :[["binance",src.symbol,t.binance],["mexc",src.symbol,t.mexc]];
+   for(const [kind,symbol,interval] of attempts){
+    try{
+     const r=await fetch(ohlcUrl(kind,symbol,interval,t.limit),{cache:"no-store"});
+     if(!r.ok) continue;
+     const j=await r.json();
+     if(t.kind==="swing"){
+      const bars=closedBars(parseBars(j));
+      if(bars.length) return [t.id,{bars}];
+      continue;
+     }
+     const prev=parsePrevOhlc(j);
+     if(prev) return [t.id,prev];
+    }catch{}
+   }
+   return [t.id,null];
   }));
   return Object.fromEntries(pairs);
  }
