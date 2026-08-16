@@ -464,7 +464,7 @@ function health(m,d){
 }
 function Metric({name,value}){return <div className="metric"><span>{name}</span><b>{Math.round(value)}</b><div><i style={{width:`${Math.max(0,Math.min(100,value))}%`}}/></div></div>}
 function App(){
- const [overview,setOverview]=useState(null),[symbol,setSymbol]=useState(""),[detail,setDetail]=useState(null),[loading,setLoading]=useState(true),[err,setErr]=useState(""),[liq,setLiq]=useState(0),[search,setSearch]=useState(""),[share,setShare]=useState(false),[side,setSide]=useState("long"),[leverage,setLeverage]=useState(10),[sizeUsd,setSizeUsd]=useState(1000),[entryInput,setEntryInput]=useState(""),[tf,setTf]=useState("240"),[klines,setKlines]=useState({}),[tvQuote,setTvQuote]=useState(null),[plan,setPlan]=useState(null);
+ const [overview,setOverview]=useState(null),[symbol,setSymbol]=useState(""),[detail,setDetail]=useState(null),[loading,setLoading]=useState(true),[err,setErr]=useState(""),[liq,setLiq]=useState(0),[search,setSearch]=useState(""),[share,setShare]=useState(false),[side,setSide]=useState("long"),[leverage,setLeverage]=useState(10),[sizeInput,setSizeInput]=useState("1000"),[entryInput,setEntryInput]=useState(""),[tf,setTf]=useState("240"),[klines,setKlines]=useState({}),[tvQuote,setTvQuote]=useState(null),[plan,setPlan]=useState(null);
  const symbolRef=useRef("");
  const prevSymbolRef=useRef("");
  const klineAtRef=useRef(0);
@@ -672,15 +672,18 @@ function App(){
  const typed=Number(entryInput);
  const draftEntry=typed>0?typed:price;
  const usedLive=!(typed>0);
- const formKey=`${side}|${leverage}|${sizeUsd}|${usedLive?"live":draftEntry||""}`;
+ const sizeUsd=Number(sizeInput);
+ const draftSize=sizeUsd>0?sizeUsd:0;
+ const formKey=`${side}|${leverage}|${draftSize||""}|${usedLive?"live":draftEntry||""}`;
  function calculateTrade(){
   if(!draftEntry)return;
   const fill=draftEntry;
+  const size=draftSize||0;
   const liq=liqPrice(fill,leverage,side);
   const path=book?depthUsd(side==="long"?book.bids:book.asks,fill,liq||fill):0;
   const chance=liquidationOdds({
    entry:fill,liq,high,low,changePct:market.price_change_pct,side,
-   bidUsd:book?.bidUsd||0,askUsd:book?.askUsd||0,sizeUsd,pathUsd:path
+   bidUsd:book?.bidUsd||0,askUsd:book?.askUsd||0,sizeUsd:size,pathUsd:path
   });
   const note=doctorTake({
    side,leverage,odds:chance||0,price,support,resistance:resistanceLevel,
@@ -692,7 +695,7 @@ function App(){
    pnlPct:price?(side==="long"?(price-fill)/fill:(fill-price)/fill)*100:null
   });
   setPlan({
-   key:formKey,symbol,side,leverage,sizeUsd,entry:fill,usedLive,mark:price,
+   key:formKey,symbol,side,leverage,sizeUsd:size,entry:fill,usedLive,mark:price,
    liq,odds:chance,distPct:Math.abs(fill-liq)/fill*100,take:note
   });
  }
@@ -820,8 +823,8 @@ return <main>
               <button type="button" className="liveBtn" onClick={()=>setEntryInput(price?String(price):"")}>LIVE</button>
             </span>
           </label>
-          <label>Size USD
-            <input type="number" min="50" step="50" value={sizeUsd} onChange={e=>setSizeUsd(Math.max(50,+e.target.value||50))}/>
+          <label>Size USD <b>{draftSize>0?"YOUR SIZE":"TYPE SIZE"}</b>
+            <input type="number" min="0" step="any" value={sizeInput} placeholder="e.g. 250" onChange={e=>setSizeInput(e.target.value)}/>
           </label>
           <button type="button" className="calcBtn" onClick={calculateTrade}>CALCULATE</button>
         </div>
