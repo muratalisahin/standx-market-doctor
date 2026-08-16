@@ -34,10 +34,10 @@ const TV_MAP={
  "SPCX-USD":"NASDAQ:SPCX"
 };
 const PIVOT_TFS=[
- {id:"1H",label:"1H",hint:"prev 1H bar",binance:"1h",mexc:"60m",yahoo:"1h"},
- {id:"4H",label:"4H",hint:"prev 4H bar",binance:"4h",mexc:"4h",yahoo:"1h"},
- {id:"1D",label:"Daily",hint:"prev day",binance:"1d",mexc:"1d",yahoo:"1d"},
- {id:"1W",label:"Weekly",hint:"prev week",binance:"1w",mexc:"1W",yahoo:"1wk"}
+ {id:"1H",label:"1H",hint:"1H swing",kind:"swing",binance:"1h",mexc:"60m",yahoo:"1h",limit:72,hug:0.005,minSpan:0.016},
+ {id:"4H",label:"4H",hint:"4H swing",kind:"swing",binance:"4h",mexc:"4h",yahoo:"1h",limit:72,hug:0.008,minSpan:0.028},
+ {id:"1D",label:"Daily",hint:"Traditional",kind:"pivot",binance:"1d",mexc:"1d",yahoo:"1d",limit:4,hug:0.01,minSpan:0.035},
+ {id:"1W",label:"Weekly",hint:"Traditional",kind:"pivot",binance:"1w",mexc:"1W",yahoo:"1wk",limit:4,hug:0.015,minSpan:0.055}
 ];
 function ohlcSource(s){
  const tv=TV_MAP[s]||"";
@@ -50,29 +50,33 @@ function ohlcSource(s){
  if(s==="CL-USD") return {kind:"yahoo",symbol:"CL=F"};
  return null;
 }
-function ohlcUrl(kind,symbol,interval){
+function ohlcUrl(kind,symbol,interval,limit=4){
  if(import.meta.env.DEV){
-  if(kind==="binance") return `/binance-api/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&limit=4`;
-  if(kind==="mexc") return `/mexc-api/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&limit=4`;
-  if(kind==="yahoo") return `/yahoo-api/v8/finance/chart/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(interval)}&range=6mo`;
+  if(kind==="binance") return `/binance-api/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&limit=${limit}`;
+  if(kind==="mexc") return `/mexc-api/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&limit=${limit}`;
+  if(kind==="yahoo") return `/yahoo-api/v8/finance/chart/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(interval)}&range=3mo`;
  }
- return `/api/ohlc?source=${encodeURIComponent(kind)}&symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}`;
+ return `/api/ohlc?source=${encodeURIComponent(kind)}&symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&limit=${limit}`;
+}
+function parseBars(j){
+ if(Array.isArray(j)){
+  return j.map(r=>({t:+r[0],h:+r[2],l:+r[3],c:+r[4],closeT:+r[6]})).filter(x=>x.h>0&&x.l>0);
+ }
+ const r=j?.chart?.result?.[0];
+ const q=r?.indicators?.quote?.[0];
+ const ts=r?.timestamp||[];
+ if(!q?.close?.length)return [];
+ return ts.map((t,i)=>({t:t*1000,h:+q.high[i],l:+q.low[i],c:+q.close[i],closeT:(t+1)*1000})).filter(x=>x.h>0&&x.l>0);
+}
+function closedBars(rows){
+ if(!rows?.length)return [];
+ const last=rows[rows.length-1];
+ return last.closeT&&last.closeT>Date.now()?rows.slice(0,-1):rows;
 }
 function parsePrevOhlc(j){
- if(!j)return null;
- if(typeof j.h==="number"&&typeof j.l==="number"&&typeof j.c==="number") return j;
- if(Array.isArray(j)&&j.length>=2){
-  const prev=j[j.length-2];
-  const h=+prev[2], l=+prev[3], c=+prev[4];
-  return h>0&&l>0&&c>0?{h,l,c}:null;
- }
- const q=j.chart?.result?.[0]?.indicators?.quote?.[0];
- if(!q?.close?.length)return null;
- let i=q.close.length-1;
- while(i>=0&&!(q.close[i]>0)) i--;
- const p=i-1;
- if(p<0||!(q.high[p]>0))return null;
- return {h:+q.high[p],l:+q.low[p],c:+q.close[p]};
+ const closed=closedBars(parseBars(j));
+ const prev=closed[closed.length-1];
+ return prev?{h:prev.h,l:prev.l,c:prev.c}:null;
 }
 function traditionalPivots(h,l,c){
  const p=(h+l+c)/3, range=h-l;
@@ -158,27 +162,85 @@ function tvSame(a,b,price){
  const r=a.resistance&&b.resistance&&Math.abs(a.resistance-b.resistance)/price<0.00025;
  return !!(s&&r);
 }
-function pivotLevels(ohlc,price){
+function uniqueLevels(rows,price){
+ const out=[];
+ for(const x of rows||[]){
+  if(!x||!Number.isFinite(x.price))continue;
+  if(out.some(y=>Math.abs(y.price-x.price)/price<0.0018))continue;
+  out.push(x);
+ }
+ return out;
+}
+function widenPair(sups,ress,price,hug,minSpan){
+ const sCands=uniqueLevels(sups.filter(x=>price-x.price>=hug),price);
+ const rCands=uniqueLevels(ress.filter(x=>x.price-price>=hug),price);
+ let best=null;
+ for(const s of sCands){
+  for(const r of rCands){
+   const span=r.price-s.price;
+   if(span<minSpan)continue;
+   if(!best||span<best.span) best={s,r,span};
+  }
+ }
+ if(best) return best;
+ return {s:sCands[sCands.length-1]||sCands[0]||null,r:rCands[rCands.length-1]||rCands[0]||null};
+}
+function pivotLevels(ohlc,price,tf){
  if(!ohlc||!price)return null;
  const all=traditionalPivots(ohlc.h,ohlc.l,ohlc.c);
  if(!all.length)return null;
- const hug=price*0.0012;
+ const hug=price*(tf?.hug||0.008);
+ const minSpan=price*(tf?.minSpan||0.028);
  const atLevel=tvAtLevel(all,price,hug);
- const sups=tvNear(all,price,"sup",hug);
- const ress=tvNear(all,price,"res",hug);
- const support=sups[0]||null;
- const resistance=ress[0]||null;
+ const sups=all.filter(x=>x.price<price).sort((a,b)=>b.price-a.price);
+ const ress=all.filter(x=>x.price>price).sort((a,b)=>a.price-b.price);
+ const {s:support,r:resistance}=widenPair(sups,ress,price,hug,minSpan);
  if(!support&&!resistance&&!atLevel)return null;
  return {
   support:support?.price??null,
   resistance:resistance?.price??null,
   supportName:support?.name,
   resistanceName:resistance?.name,
-  nextSupport:sups[1]?.price??null,
-  nextResistance:ress[1]?.price??null,
+  nextSupport:sups.find(x=>support&&x.price<support.price*0.997)?.price??null,
+  nextResistance:ress.find(x=>resistance&&x.price>resistance.price*1.002)?.price??null,
   atLevel:atLevel?{price:atLevel.price,name:atLevel.name,source:"TradingView"}:null,
   supportSource:support?"TradingView":null,
   resistanceSource:resistance?"TradingView":null,
+  source:"TradingView"
+ };
+}
+function swingLevels(bars,price,tf){
+ if(!bars?.length||!price)return null;
+ const label=tf?.label||"Swing";
+ const hug=price*(tf?.hug||0.007);
+ const minSpan=price*(tf?.minSpan||0.024);
+ const w=bars.length<16?1:2;
+ const last=bars.length-1;
+ const lows=[],highs=[];
+ for(let i=w;i<=last-w;i++){
+  let isL=true,isH=true;
+  for(let k=1;k<=w;k++){
+   if(bars[i].l>bars[i-k].l||bars[i].l>=bars[i+k].l)isL=false;
+   if(bars[i].h<bars[i-k].h||bars[i].h<=bars[i+k].h)isH=false;
+  }
+  if(isL) lows.push({name:`${label} swing`,price:bars[i].l,t:bars[i].t});
+  if(isH) highs.push({name:`${label} swing`,price:bars[i].h,t:bars[i].t});
+ }
+ const rangeLow={name:`${label} low`,price:Math.min(...bars.map(x=>x.l))};
+ const rangeHigh={name:`${label} high`,price:Math.max(...bars.map(x=>x.h))};
+ const sups=[...lows,rangeLow].filter(x=>x.price<price).sort((a,b)=>b.price-a.price);
+ const ress=[...highs,rangeHigh].filter(x=>x.price>price).sort((a,b)=>a.price-b.price);
+ const {s:support,r:resistance}=widenPair(sups,ress,price,hug,minSpan);
+ if(!support&&!resistance)return null;
+ return {
+  support:support?.price??null,
+  resistance:resistance?.price??null,
+  supportName:support?.name,
+  resistanceName:resistance?.name,
+  nextSupport:sups.find(x=>support&&x.price<support.price*0.997)?.price??null,
+  nextResistance:ress.find(x=>resistance&&x.price>resistance.price*1.002)?.price??null,
+  supportSource:"TradingView",
+  resistanceSource:"TradingView",
   source:"TradingView"
  };
 }
@@ -492,9 +554,11 @@ function App(){
   const pairs=await Promise.all(PIVOT_TFS.map(async t=>{
    const interval=src.kind==="yahoo"?t.yahoo:src.kind==="mexc"?t.mexc:t.binance;
    try{
-    const r=await fetch(ohlcUrl(src.kind,src.symbol,interval),{cache:"no-store"});
+    const r=await fetch(ohlcUrl(src.kind,src.symbol,interval,t.limit),{cache:"no-store"});
     if(!r.ok)return [t.id,null];
-    return [t.id,parsePrevOhlc(await r.json())];
+    const j=await r.json();
+    if(t.kind==="swing") return [t.id,{bars:closedBars(parseBars(j))}];
+    return [t.id,parsePrevOhlc(j)];
    }catch{return [t.id,null];}
   }));
   return Object.fromEntries(pairs);
@@ -670,7 +734,10 @@ function App(){
  const tfMap=useMemo(()=>{
   const empty={support:null,resistance:null,source:null};
   const out={};
-  for(const t of PIVOT_TFS) out[t.id]=pivotLevels(pivotOhlc?.[t.id],price)||empty;
+  for(const t of PIVOT_TFS){
+   const raw=pivotOhlc?.[t.id];
+   out[t.id]=t.kind==="swing"?swingLevels(raw?.bars,price,t)||empty:pivotLevels(raw,price,t)||empty;
+  }
   return out;
  },[price,pivotOhlc]);
  const structured=tfMap[tf];
@@ -822,7 +889,7 @@ return <main>
           <div>
             <div className="label">OPEN TRADE DESK</div>
             <h3>If you open this now</h3>
-            <p>Enter the trade, then calculate. Liquidation is for that fill, not live mark drift. Traditional pivots from the previous 1H / 4H / daily / weekly candle — same formula as TradingView Pivot Points Standard. {DISCLAIMER}.</p>
+            <p>Enter the trade, then calculate. Liquidation is for that fill, not live mark drift. 1H/4H use chart swings; Daily/Weekly use TradingView Traditional pivots. {DISCLAIMER}.</p>
           </div>
           <Stander pose={odds>=45?"think":"focus"} className="standerDesk"/>
         </div>
