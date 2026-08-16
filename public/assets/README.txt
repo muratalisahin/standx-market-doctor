@@ -1,0 +1,1 @@
+Add official StandX logo as logo.svg and official Stander mascot as stander.png here. The UI falls back gracefully if absent.
