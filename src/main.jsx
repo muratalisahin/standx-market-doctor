@@ -34,10 +34,10 @@ const TV_MAP={
  "SPCX-USD":"NASDAQ:SPCX"
 };
 const PIVOT_TFS=[
- {id:"1H",label:"1H",hint:"1H swing",kind:"swing",binance:"1h",mexc:"60m",yahoo:"1h",limit:48,hug:0.004,minSpan:0.012,tol:0.0025},
- {id:"4H",label:"4H",hint:"4H swing",kind:"swing",binance:"4h",mexc:"4h",yahoo:"1h",limit:48,hug:0.006,minSpan:0.018,tol:0.003},
- {id:"1D",label:"Daily",hint:"Daily swing",kind:"swing",binance:"1d",mexc:"1d",yahoo:"1d",limit:40,hug:0.008,minSpan:0.028,tol:0.0035},
- {id:"1W",label:"Weekly",hint:"Weekly swing",kind:"swing",binance:"1w",mexc:"1W",yahoo:"1wk",limit:26,hug:0.012,minSpan:0.045,tol:0.005}
+ {id:"1H",label:"1H",hint:"1H swing",kind:"swing",binance:"1h",mexc:"60m",yahoo:"1h",limit:72,hug:0.006,maxDist:0.028,tol:0.003,keep:0.62},
+ {id:"4H",label:"4H",hint:"4H swing",kind:"swing",binance:"4h",mexc:"4h",yahoo:"1h",limit:120,hug:0.012,maxDist:0.04,tol:0.005,keep:0.62},
+ {id:"1D",label:"Daily",hint:"Daily swing",kind:"swing",binance:"1d",mexc:"1d",yahoo:"1d",limit:200,hug:0.05,maxDist:0.12,tol:0.005,keep:1},
+ {id:"1W",label:"Weekly",hint:"Weekly swing",kind:"swing",binance:"1w",mexc:"1W",yahoo:"1wk",limit:52,hug:0.07,maxDist:0.22,tol:0.008,keep:1}
 ];
 function ohlcSource(s){
  const tv=TV_MAP[s]||"";
@@ -51,10 +51,11 @@ function ohlcSource(s){
  return null;
 }
 function ohlcUrl(kind,symbol,interval,limit=4){
+ const yahooRange=limit>=80?"1y":"3mo";
  if(import.meta.env.DEV){
   if(kind==="binance") return `/binance-api/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&limit=${limit}`;
   if(kind==="mexc") return `/mexc-api/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&limit=${limit}`;
-  if(kind==="yahoo") return `/yahoo-api/v8/finance/chart/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(interval)}&range=3mo`;
+  if(kind==="yahoo") return `/yahoo-api/v8/finance/chart/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(interval)}&range=${yahooRange}`;
  }
  return `/api/ohlc?source=${encodeURIComponent(kind)}&symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&limit=${limit}`;
 }
@@ -162,65 +163,46 @@ function tvSame(a,b,price){
  const r=a.resistance&&b.resistance&&Math.abs(a.resistance-b.resistance)/price<0.00025;
  return !!(s&&r);
 }
-function bucketLevels(points,price,tol,keep){
- const width=price*tol;
- const buckets=new Map();
- for(const p of points||[]){
-  if(!p||!Number.isFinite(p.price))continue;
-  const key=Math.round(p.price/width);
-  const g=buckets.get(key);
-  if(!g) buckets.set(key,{name:p.name,price:p.price,t:p.t||0,touches:1});
-  else{
-   g.price=keep==="min"?Math.min(g.price,p.price):Math.max(g.price,p.price);
-   g.touches+=1;
-   g.t=Math.max(g.t||0,p.t||0);
-  }
- }
- return [...buckets.values()];
+function medianPrice(vals){
+ const s=[...vals].sort((a,b)=>a-b);
+ const m=Math.floor(s.length/2);
+ return s.length%2?s[m]:(s[m-1]+s[m])/2;
 }
-function rankLevels(groups,price,hug,spanT,lastT,side){
- return groups
-  .filter(g=>side==="sup"?g.price<price-hug:g.price>price+hug)
-  .map(g=>{
-   const dist=Math.abs(price-g.price)/price;
-   const recency=Math.exp(-((lastT-(g.t||0))/Math.max(spanT,1))*2.2);
-   const score=(0.7+0.3*Math.min(g.touches,3)/3)*(0.35+0.65*recency)/(dist+0.01);
-   return {...g,score};
-  })
-  .sort((a,b)=>b.score-a.score);
-}
-function widenPicked(sups,ress,price,minSpan){
- let support=sups[0]||null, resistance=ress[0]||null;
- if(support&&resistance&&resistance.price-support.price<minSpan){
-  const tighterRes=resistance.price-price<=price-support.price;
-  if(tighterRes){
-   const nxt=ress.find(x=>x.price>resistance.price*1.004);
-   if(nxt) resistance=nxt;
-   else{
-    const ns=sups.find(x=>x.price<support.price*0.996);
-    if(ns) support=ns;
-   }
-  }else{
-   const nxt=sups.find(x=>x.price<support.price*0.996);
-   if(nxt) support=nxt;
-   else{
-    const nr=ress.find(x=>x.price>resistance.price*1.004);
-    if(nr) resistance=nr;
-   }
-  }
+function clusterWicks(vals,price,maxW){
+ const sorted=[...vals].filter(v=>Number.isFinite(v)&&v>0).sort((a,b)=>a-b);
+ const groups=[];
+ for(const v of sorted){
+  const g=groups[groups.length-1];
+  if(g&&(v-g[0])/price<=maxW) g.push(v);
+  else groups.push([v]);
  }
- return {support,resistance};
+ return groups.map(g=>({min:g[0],max:g[g.length-1],median:medianPrice(g),touches:g.length}));
+}
+function pickBand(groups,price,hug,maxDist,side,keep){
+ const rows=groups.map(g=>({...g,price:side==="sup"?g.min:g.max}));
+ const lo=price-maxDist, hi=price-hug;
+ const a=price+hug, b=price+maxDist;
+ const band=rows.filter(g=>side==="sup"?g.price>=lo&&g.price<=hi:g.price>=a&&g.price<=b);
+ if(!band.length){
+  const pool=rows.filter(g=>side==="sup"?g.price<price:g.price>price)
+   .sort((x,y)=>Math.abs(price-x.price)-Math.abs(price-y.price));
+  return pool[0]||null;
+ }
+ const maxN=Math.max(...band.map(g=>g.touches));
+ const strong=band.filter(g=>g.touches>=maxN*(keep||0.65))
+  .sort((x,y)=> keep>=1
+   ? (y.touches-x.touches)||Math.abs(price-x.price)-Math.abs(price-y.price)
+   : Math.abs(price-x.price)-Math.abs(price-y.price));
+ return strong[0]||null;
 }
 function pivotLevels(ohlc,price,tf){
  if(!ohlc||!price)return null;
  const all=traditionalPivots(ohlc.h,ohlc.l,ohlc.c);
  if(!all.length)return null;
  const hug=price*(tf?.hug||0.008);
- const minSpan=price*(tf?.minSpan||0.028);
  const atLevel=tvAtLevel(all,price,hug);
- const sups=all.filter(x=>x.price<price).sort((a,b)=>b.price-a.price);
- const ress=all.filter(x=>x.price>price).sort((a,b)=>a.price-b.price);
- const {support,resistance}=widenPicked(sups,ress,price,minSpan);
+ const support=all.filter(x=>x.price<price-hug).sort((a,b)=>b.price-a.price)[0]||null;
+ const resistance=all.filter(x=>x.price>price+hug).sort((a,b)=>a.price-b.price)[0]||null;
  if(!support&&!resistance&&!atLevel)return null;
  return {
   support:support?.price??null,
@@ -237,35 +219,17 @@ function swingLevels(bars,price,tf){
  if(!bars?.length||!price)return null;
  const label=tf?.label||"Swing";
  const hug=price*(tf?.hug||0.006);
- const minSpan=price*(tf?.minSpan||0.02);
- const tol=tf?.tol||0.003;
- const w=bars.length<16?1:2;
- const last=bars.length-1;
- const lastT=bars[last].t||0;
- const spanT=Math.max(1,lastT-(bars[0].t||0));
- const lows=[],highs=[];
- for(let i=w;i<=last-w;i++){
-  let isL=true,isH=true;
-  for(let k=1;k<=w;k++){
-   if(bars[i].l>bars[i-k].l||bars[i].l>=bars[i+k].l)isL=false;
-   if(bars[i].h<bars[i-k].h||bars[i].h<=bars[i+k].h)isH=false;
-  }
-  if(isL) lows.push({name:`${label} swing`,price:bars[i].l,t:bars[i].t});
-  if(isH) highs.push({name:`${label} swing`,price:bars[i].h,t:bars[i].t});
- }
- const loBar=bars.reduce((m,x)=>x.l<m.l?x:m);
- const hiBar=bars.reduce((m,x)=>x.h>m.h?x:m);
- lows.push({name:`${label} swing`,price:loBar.l,t:loBar.t});
- highs.push({name:`${label} swing`,price:hiBar.h,t:hiBar.t});
- const sups=rankLevels(bucketLevels(lows,price,tol,"min"),price,hug,spanT,lastT,"sup");
- const ress=rankLevels(bucketLevels(highs,price,tol,"max"),price,hug,spanT,lastT,"res");
- const {support,resistance}=widenPicked(sups,ress,price,minSpan);
+ const maxDist=price*(tf?.maxDist||0.04);
+ const tol=tf?.tol||0.0035;
+ const keep=tf?.keep??0.65;
+ const support=pickBand(clusterWicks(bars.map(x=>x.l),price,tol),price,hug,maxDist,"sup",keep);
+ const resistance=pickBand(clusterWicks(bars.map(x=>x.h),price,tol),price,hug,maxDist,"res",keep);
  if(!support&&!resistance)return null;
  return {
   support:support?.price??null,
   resistance:resistance?.price??null,
-  supportName:support?.name,
-  resistanceName:resistance?.name,
+  supportName:support?`${label} swing`:null,
+  resistanceName:resistance?`${label} swing`:null,
   supportSource:"TradingView",
   resistanceSource:"TradingView",
   source:"TradingView"
