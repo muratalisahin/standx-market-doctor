@@ -464,6 +464,7 @@ function App(){
  const symbolRef=useRef("");
  const prevSymbolRef=useRef("");
  const klineAtRef=useRef(0);
+ const selectedHold=useRef(null);
  async function getOverview(){
   const r=await fetch(marketUrl(),{cache:"no-store"}); if(!r.ok)throw Error(); return r.json();
  }
@@ -511,23 +512,25 @@ function App(){
  }
  useEffect(()=>{symbolRef.current=symbol},[symbol]);
  useEffect(()=>{
-  let stop=false;
+  let stop=false,busy=false;
   async function boot(){
    try{
     const o=await getOverview();
     if(stop)return;
+    if(!o?.symbols?.length)throw Error();
     setOverview(o);
     setErr("");
-    const s=o.symbols?.[0]?.symbol||"";
-    if(s){symbolRef.current=s;setSymbol(s);}
+    const s=o.symbols[0]?.symbol||"";
+    if(s&&!symbolRef.current){symbolRef.current=s;setSymbol(s);}
    }catch{
     if(!stop)setErr("StandX market data could not be loaded.");
    }finally{
     if(!stop)setLoading(false);
    }
   }
-  boot();
-  const id=setInterval(async()=>{
+  async function tick(){
+   if(stop||busy||document.hidden)return;
+   busy=true;
    const current=symbolRef.current;
    try{
     const [o,d]=await Promise.all([
@@ -535,8 +538,10 @@ function App(){
      current?getDetail(current):null
     ]);
     if(stop)return;
-    setOverview(o);
-    setErr("");
+    if(o?.symbols?.length){
+     setOverview(o);
+     setErr("");
+    }
     if(d&&d.a?.symbol===symbolRef.current)setDetail(d);
     if(current&&Date.now()-klineAtRef.current>20000){
      klineAtRef.current=Date.now();
@@ -547,23 +552,29 @@ function App(){
      }
     }
    }catch{}
-  },8000);
-  return()=>{stop=true;clearInterval(id);}
+   finally{busy=false;}
+  }
+  boot();
+  const id=setInterval(tick,8000);
+  const onVis=()=>{if(!document.hidden)tick();};
+  document.addEventListener("visibilitychange",onVis);
+  return()=>{stop=true;clearInterval(id);document.removeEventListener("visibilitychange",onVis);}
  },[]);
  useEffect(()=>{
   if(!symbol)return;
-  if(prevSymbolRef.current&&prevSymbolRef.current!==symbol){setEntryInput("");setPlan(null);}
+  const switched=!!(prevSymbolRef.current&&prevSymbolRef.current!==symbol);
+  if(switched){setEntryInput("");setPlan(null);setKlines({});setTvQuote(null);}
   prevSymbolRef.current=symbol;
   let stop=false;
-  setTvQuote(null);
-  setKlines({});
   getDetail(symbol).then(d=>{if(!stop&&d.a?.symbol===symbolRef.current)setDetail(d)}).catch(()=>{});
   loadAllKlines(symbol).then(bars=>{if(!stop&&symbolRef.current===symbol){klineAtRef.current=Date.now();setKlines(bars);}}).catch(()=>{});
-  getTv(symbol).then(tv=>{if(!stop&&symbolRef.current===symbol)setTvQuote(tv||null)}).catch(()=>setTvQuote(null));
+  getTv(symbol).then(tv=>{if(!stop&&symbolRef.current===symbol&&tv)setTvQuote(tv)}).catch(()=>{});
   return()=>{stop=true};
  },[symbol]);
  const liveDetail=detail?.a?.symbol===symbol?detail:null;
- const selected=overview?.symbols?.find(x=>x.symbol===symbol)||liveDetail?.a;
+ const selectedNow=overview?.symbols?.find(x=>x.symbol===symbol)||liveDetail?.a;
+ if(selectedNow)selectedHold.current=selectedNow;
+ const selected=selectedNow||selectedHold.current;
  const score=health(selected,liveDetail?.b),sim=Math.max(0,Math.min(100,Math.round(score+liq*.18)));
  const status=score>=80?"HEALTHY":score>=60?"WATCH":"NEEDS ATTENTION";
  const filtered=(overview?.symbols||[]).filter(x=>x.symbol.toLowerCase().includes(search.toLowerCase())||x.base?.toLowerCase().includes(search.toLowerCase()));
@@ -610,7 +621,7 @@ function App(){
  const typed=Number(entryInput);
  const draftEntry=typed>0?typed:price;
  const usedLive=!(typed>0);
- const formKey=`${side}|${leverage}|${sizeUsd}|${draftEntry||""}`;
+ const formKey=`${side}|${leverage}|${sizeUsd}|${usedLive?"live":draftEntry||""}`;
  function calculateTrade(){
   if(!draftEntry)return;
   const fill=draftEntry;
