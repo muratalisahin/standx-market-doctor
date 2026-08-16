@@ -2,7 +2,7 @@ import React,{useEffect,useMemo,useRef,useState}from"react";
 import{createRoot}from"react-dom/client";
 import{toPng}from"html-to-image";
 import"./style.css";
-const DISCLAIMER="Yatırım tavsiyesi değildir";
+const DISCLAIMER="Not investment advice";
 const marketUrl=(s="") => import.meta.env.DEV
   ? (s
       ? `/standx-api/api/query_symbol_market?symbol=${encodeURIComponent(s)}`
@@ -363,34 +363,90 @@ function liquidationOdds({entry,liq,high,low,changePct,side,bidUsd,askUsd,sizeUs
  if(dist<0.02)p+=0.15;
  return Math.round(Math.min(92,Math.max(4,p*100)));
 }
-function doctorTake({side,leverage,odds,price,support,resistance,funding,changePct,score}){
+function doctorTake({side,leverage,odds,price,support,resistance,funding,changePct,score,vsStatus,pnlPct}){
  const toSup=support?(price-support)/price:1;
  const toRes=resistance?(resistance-price)/price:1;
  const fund=Number(funding)||0;
- let risk,sit;
- if(odds>=55||leverage>=20){
+ const inProfit=Number(pnlPct)>0.4;
+ let risk,sit,action,idea;
+ if(odds>=55||leverage>=20||vsStatus==="DANGER"){
   risk="HIGH";
-  sit="Do not sit this. Cut leverage so liquidation sits outside today's range.";
+  action="CLOSE";
+  sit="This is too tight. Close it or cut leverage so liq is outside the range.";
+  idea=vsStatus==="DANGER"
+   ?(side==="long"
+     ?"Liq is sitting above support. A normal dip can wipe the long before the level even breaks. Close it, or add margin now."
+     :"Liq is sitting below resistance. A squeeze can wipe the short before the level even breaks. Close it, or add margin now.")
+   :"Liq is too close. I would not hold this. Close it, or cut the size hard.";
+ }else if(toRes<0.004){
+  if(side==="long"){
+   risk="ELEVATED";
+   action="TAKE PROFIT";
+   sit="Price is at resistance. Take some off. Don't ride a full long into the level.";
+   idea=inProfit
+    ?"You're into resistance and this long is working. Take profit. Wait for a rejection, or a break and a retest."
+    :"Price is kissing resistance. Holding the full long here is late. Trim it or get out, then wait.";
+  }else{
+   risk="MANAGEABLE";
+   action="HOLD";
+   sit="Let the short test resistance. Get out if the level breaks.";
+   idea="Resistance is right here. Hold the short, don't add. If it breaks, cover.";
+  }
+ }else if(toSup<0.004){
+  if(side==="long"){
+   risk="MANAGEABLE";
+   action="HOLD";
+   sit="Hold at support. Invalidation is a break under the level.";
+   idea="Price is on support. Hold the long, stop under the level. Don't add until it actually holds.";
+  }else{
+   risk="ELEVATED";
+   action="TAKE PROFIT";
+   sit="Support is here. Cover some. Don't sit a full short into the bounce.";
+   idea=inProfit
+    ?"The short worked and you're on support. Take profit and wait."
+    :"Price is sitting on support. A full short here is late. Cover some, or get out.";
+  }
+ }else if(side==="long"&&changePct>1.5&&toRes<0.012){
+  risk="ELEVATED";
+  action="TAKE PROFIT";
+  sit="This is a chase into resistance. Take some off.";
+  idea="This long is chasing into resistance. Take profit. Don't hold out for more from here.";
+ }else if(vsStatus==="TIGHT"){
+  risk="ELEVATED";
+  action="CUT SIZE";
+  sit="The gap to liq is thin. Smaller size, or more margin.";
+  idea="You can hold a smaller size. This one is too close to the level — cut it, or add margin.";
  }else if(odds>=30){
   risk="ELEVATED";
+  action="CUT SIZE";
   sit=side==="long"
-   ?"Sit small. Add margin or lower leverage before the next swing."
-   :"Sit small. A squeeze into resistance can take the short out.";
+   ?"Keep it small. Add margin or lower leverage before the next swing."
+   :"Keep it small. A squeeze into resistance can take this short out.";
+  idea="This leverage is a bit much for the next swing. Cut size. You can still hold, just not this big.";
+ }else if(fund>0.0002&&side==="long"){
+  risk="ELEVATED";
+  action="CUT SIZE";
+  sit="Funding is paying shorts. Don't sit an oversized long.";
+  idea="Funding is paying shorts. Don't sit a big long just because the day is green. Cut it down to planned size.";
+ }else if(fund<-0.0002&&side==="short"){
+  risk="ELEVATED";
+  action="CUT SIZE";
+  sit="Funding is paying longs. Don't sit an oversized short.";
+  idea="Funding is paying longs. Don't sit a big short into that grind. Cut it down to planned size.";
+ }else if(score>=80&&odds<30){
+  risk="MANAGEABLE";
+  action="HOLD";
+  sit="You can hold the planned size. Don't scale up.";
+  idea="You can hold this. Keep the size you planned — don't add. The book looks fine; the risk is still the leverage.";
  }else{
   risk="MANAGEABLE";
+  action="WAIT";
   sit=side==="long"
-   ?"You can sit the long if invalidation is a break of support, not a random wick."
-   :"You can sit the short if invalidation is a break of resistance.";
+   ?"Only hold if the stop is already under support. Otherwise wait."
+   :"Only hold if the stop is already above resistance. Otherwise wait.";
+  idea="Nothing to chase. Price is between levels. If you don't already have a stop, stay flat. If you do, hold and wait for a test.";
  }
- let idea;
- if(toRes<0.004) idea="Price is pressed into resistance. Do not chase a long here. Wait for rejection, or a clean break and retest.";
- else if(toSup<0.004) idea="Price is sitting on support. A long is cleaner here than mid-range, with a hard stop under the level.";
- else if(side==="long"&&changePct>1.5&&toRes<0.012) idea="This looks like a chase into resistance. Do not add. Take risk off, or wait for the level to decide.";
- else if(fund>0.0002&&side==="long") idea="Funding is paying shorts. Do not sit an oversized long just because the 24h print is green.";
- else if(fund<-0.0002&&side==="short") idea="Funding is paying longs. Do not sit an oversized short into that grind.";
- else if(score>=80&&odds<30) idea="The book is healthy enough to sit a planned size, not a bigger one. The risk is the leverage, not the headline.";
- else idea="Price is between levels and the book is not offering a chase. Wait for support or resistance to be tested before adding risk.";
- return {risk,sit,idea};
+ return {risk,sit,action,idea};
 }
 
 function health(m,d){
@@ -566,7 +622,12 @@ function App(){
   });
   const note=doctorTake({
    side,leverage,odds:chance||0,price,support,resistance:resistanceLevel,
-   funding:market.funding_rate,changePct:Number(market.price_change_pct||0),score
+   funding:market.funding_rate,changePct:Number(market.price_change_pct||0),score,
+   vsStatus:liqVsLevels({
+    side,liq,support,resistance:resistanceLevel,
+    supportName:structured?.supportName,resistanceName:structured?.resistanceName,tfLabel:tfMeta.label
+   })?.status,
+   pnlPct:price?(side==="long"?(price-fill)/fill:(fill-price)/fill)*100:null
   });
   setPlan({
    key:formKey,symbol,side,leverage,sizeUsd,entry:fill,usedLive,mark:price,
@@ -577,12 +638,16 @@ function App(){
  const liqPx=plan?.liq??null;
  const odds=plan?.odds??null;
  const distPct=plan?.distPct??null;
- const take=plan?.take||null;
  const pnlPct=plan&&price?(plan.side==="long"?(price-plan.entry)/plan.entry:(plan.entry-price)/plan.entry)*100:null;
  const stale=!!(plan&&plan.key!==formKey);
  const vs=plan?liqVsLevels({
   side:plan.side,liq:plan.liq,support,resistance:resistanceLevel,
   supportName:structured?.supportName,resistanceName:structured?.resistanceName,tfLabel:tfMeta.label
+ }):null;
+ const take=plan?doctorTake({
+  side:plan.side,leverage:plan.leverage,odds:plan.odds||0,price,support,resistance:resistanceLevel,
+  funding:market.funding_rate,changePct:Number(market.price_change_pct||0),score,
+  vsStatus:vs?.status,pnlPct
  }):null;
  const h1=tfMap["60"], h4=tfMap["240"];
  const vs1h=plan?liqVsLevels({side:plan.side,liq:plan.liq,support:h1?.support,resistance:h1?.resistance,supportName:h1?.supportName,resistanceName:h1?.resistanceName,tfLabel:"1H"}):null;
@@ -631,7 +696,7 @@ function App(){
          <em className={cmp?.status||""}>{cmp?.headline||"Calculate to compare liq"}</em>
        </div>)}
      </div>
-     <div className="shareNote"><small>RISK ANALYSIS · {DISCLAIMER}</small><p>{[vs1h?.headline,vs4h?.headline].filter(Boolean).join(". ")}{[vs1h?.headline||vs4h?.headline]?". ":""}{take?.idea||note}</p></div>
+     <div className="shareNote"><div className="takeHead"><img src={LOGO} alt="StandX"/><small>STANDX DOCTOR DIAGNOSIS · {DISCLAIMER}</small></div><p><b>{take?.action||"WAIT"}</b> — {take?.idea||note}</p><p className="standerLine">Stander: “Please manage your risk.”</p></div>
    </div>
    <div className="shareFoot">
      <span>StandX Market Doctor</span>
@@ -696,7 +761,12 @@ return <main>
           </label>
           <button type="button" className="calcBtn" onClick={calculateTrade}>CALCULATE</button>
         </div>
-        {plan?<div className={`calcResult ${stale?"stale":""}`}>For the <b>{plan.side.toUpperCase()} {plan.leverage}x</b> you entered at <b>{px(plan.entry)}</b>{plan.usedLive?" (live mark)":""} · ${money(plan.sizeUsd)}, isolated liquidation would be <b>{px(plan.liq)}</b>.{stale?" Recalculate to update.":""}</div>:<p className="calcHint">Fill side, leverage, entry and size, then calculate. Liq is for the trade you entered.</p>}
+        {plan?<div className={`calcResult ${stale?"stale":""}`}>
+          <div className="takeHead"><img src={LOGO} alt="StandX"/><span>STANDX DOCTOR DIAGNOSIS · {DISCLAIMER}</span></div>
+          <p>For your <b>{plan.side.toUpperCase()} {plan.leverage}x</b> at <b>{px(plan.entry)}</b>{plan.usedLive?" (live mark)":""} · ${money(plan.sizeUsd)}, isolated liquidation is <b>{px(plan.liq)}</b>.{stale?" Recalculate to update.":""}</p>
+          <p><b>{take?.action||"READ"}</b> — {take?.idea}</p>
+          <p className="standerLine">Stander: “Please manage your risk.”</p>
+        </div>:<p className="calcHint">Calculate to get the StandX doctor's diagnosis for the trade you entered.</p>}
         <div className="deskGrid">
           <div className={`deskStat ${odds>=55?"hot":odds>=30?"warm":"cool"}`}>
             <span>LIQUIDATION CHANCE</span>
@@ -763,8 +833,11 @@ return <main>
           {liqPos!=null&&<span className="srLiqLab" style={{left:`${Math.max(8,Math.min(92,liqPos))}%`}}>Liq</span>}
         </div>
         <div className="take">
-          <small>RISK ANALYSIS · {DISCLAIMER}</small>
-          <p>{take?.idea}</p>
+          <div className="takeHead"><img src={LOGO} alt="StandX"/><small>STANDX DOCTOR DIAGNOSIS · {DISCLAIMER}</small></div>
+          {plan?<>
+            <p><b>{take?.action}</b> — {take?.idea}</p>
+            <div className="standerSay"><Stander pose={take?.action==="CLOSE"||take?.action==="TAKE PROFIT"?"think":"focus"} className="standerTalk"/><q>Please manage your risk.</q></div>
+          </>:<p>Calculate the trade to see the StandX doctor's diagnosis.</p>}
         </div>
       </div>
     </div></>}

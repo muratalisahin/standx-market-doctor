@@ -100,8 +100,22 @@
 .srL{left:0}.srM{left:50%;transform:translateX(-50%)}.srR{right:0}
 .srLiqLab{color:#d34d55;transform:translateX(-50%)}
 .take{background:#101511;color:#e8f0ea;border-radius:16px;padding:16px 18px}
-.take small{color:#8aa08f}
+.takeHead{display:flex;align-items:center;gap:10px;margin-bottom:2px}
+.takeHead img{height:18px;width:auto;object-fit:contain}
+.take .takeHead img,.calcResult .takeHead img{filter:brightness(0) invert(1)}
+.shareNote .takeHead{margin-bottom:6px}
+.shareNote .takeHead img{filter:none;max-height:18px}
+.take small,.calcResult .takeHead span{color:#8aa08f;font-size:9px;letter-spacing:.12em;font-weight:800}
 .take p{color:#d5e0d8!important;margin:8px 0 0;font-size:13px!important;line-height:1.55}
+.take p b{color:#31d66d;letter-spacing:.06em}
+.standerSay{display:flex;align-items:center;gap:12px;margin-top:12px;padding-top:12px;border-top:1px solid #2a332c}
+.standerTalk{width:52px;height:auto;filter:none}
+.standerSay q{color:#c5d4c9;font-size:14px;font-style:italic}
+.standerLine{color:#8aa08f!important;font-size:12px!important;margin-top:8px!important}
+.calcResult .takeHead{margin-bottom:10px}
+.calcResult .takeHead span{color:#8fd4a4}
+.calcResult p{margin:0 0 8px}
+.calcResult p:last-child{margin:0}
 @media(max-width:1000px){.deskControls,.deskGrid,.levels,.tfGrid{grid-template-columns:1fr}}
 @media(max-width:650px){.standerDesk{width:70px}}
 
