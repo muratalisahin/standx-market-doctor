@@ -819,12 +819,12 @@ return <main>
           </label>
           <label>Entry price <b>{usedLive?"LIVE MARK":"YOUR FILL"}</b>
             <span className="entryWrap">
-              <input type="number" min="0" step="any" value={entryInput} placeholder={price?String(price):"Fill price"} onChange={e=>setEntryInput(e.target.value)}/>
+              <input type="number" min="0" step="any" inputMode="decimal" value={entryInput} placeholder={price?String(price):"Fill price"} onChange={e=>setEntryInput(e.target.value)}/>
               <button type="button" className="liveBtn" onClick={()=>setEntryInput(price?String(price):"")}>LIVE</button>
             </span>
           </label>
           <label>Size USD <b>{draftSize>0?"YOUR SIZE":"TYPE SIZE"}</b>
-            <input type="number" min="0" step="any" value={sizeInput} placeholder="e.g. 250" onChange={e=>setSizeInput(e.target.value)}/>
+            <input type="number" min="0" step="any" inputMode="decimal" value={sizeInput} placeholder="e.g. 250" onChange={e=>setSizeInput(e.target.value)}/>
           </label>
           <button type="button" className="calcBtn" onClick={calculateTrade}>CALCULATE</button>
         </div>
