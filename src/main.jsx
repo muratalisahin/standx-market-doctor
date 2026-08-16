@@ -33,6 +33,59 @@ const TV_MAP={
  "MU-USD":"NASDAQ:MU",
  "SPCX-USD":"NASDAQ:SPCX"
 };
+const PIVOT_TFS=[
+ {id:"1H",label:"1H",hint:"prev 1H bar",binance:"1h",mexc:"60m",yahoo:"1h"},
+ {id:"4H",label:"4H",hint:"prev 4H bar",binance:"4h",mexc:"4h",yahoo:"1h"},
+ {id:"1D",label:"Daily",hint:"prev day",binance:"1d",mexc:"1d",yahoo:"1d"},
+ {id:"1W",label:"Weekly",hint:"prev week",binance:"1w",mexc:"1W",yahoo:"1wk"}
+];
+function ohlcSource(s){
+ const tv=TV_MAP[s]||"";
+ const [ex,sym]=tv.split(":");
+ if(ex==="BINANCE") return {kind:"binance",symbol:sym};
+ if(ex==="MEXC") return {kind:"mexc",symbol:sym};
+ if(ex==="NASDAQ") return {kind:"yahoo",symbol:sym};
+ if(s==="XAU-USD") return {kind:"yahoo",symbol:"GC=F"};
+ if(s==="XAG-USD") return {kind:"yahoo",symbol:"SI=F"};
+ if(s==="CL-USD") return {kind:"yahoo",symbol:"CL=F"};
+ return null;
+}
+function ohlcUrl(kind,symbol,interval){
+ if(import.meta.env.DEV){
+  if(kind==="binance") return `/binance-api/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&limit=4`;
+  if(kind==="mexc") return `/mexc-api/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&limit=4`;
+  if(kind==="yahoo") return `/yahoo-api/v8/finance/chart/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(interval)}&range=6mo`;
+ }
+ return `/api/ohlc?source=${encodeURIComponent(kind)}&symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}`;
+}
+function parsePrevOhlc(j){
+ if(!j)return null;
+ if(typeof j.h==="number"&&typeof j.l==="number"&&typeof j.c==="number") return j;
+ if(Array.isArray(j)&&j.length>=2){
+  const prev=j[j.length-2];
+  const h=+prev[2], l=+prev[3], c=+prev[4];
+  return h>0&&l>0&&c>0?{h,l,c}:null;
+ }
+ const q=j.chart?.result?.[0]?.indicators?.quote?.[0];
+ if(!q?.close?.length)return null;
+ let i=q.close.length-1;
+ while(i>=0&&!(q.close[i]>0)) i--;
+ const p=i-1;
+ if(p<0||!(q.high[p]>0))return null;
+ return {h:+q.high[p],l:+q.low[p],c:+q.close[p]};
+}
+function traditionalPivots(h,l,c){
+ const p=(h+l+c)/3, range=h-l;
+ return [
+  {name:"R3",price:p*2+(h-2*l)},
+  {name:"R2",price:p+range},
+  {name:"R1",price:p*2-l},
+  {name:"P",price:p},
+  {name:"S1",price:p*2-h},
+  {name:"S2",price:p-range},
+  {name:"S3",price:p*2-(2*h-l)}
+ ].filter(x=>Number.isFinite(x.price)&&x.price>0);
+}
 const TV_TF={"60":"|60","240":"|240","1D":"","1W":"|1W"};
 const TV_CLASSIC=["Pivot.M.Classic.S3","Pivot.M.Classic.S2","Pivot.M.Classic.S1","Pivot.M.Classic.Middle","Pivot.M.Classic.R1","Pivot.M.Classic.R2","Pivot.M.Classic.R3"];
 const TV_EXTRA=[
@@ -58,12 +111,18 @@ function tvRead(data,keys,suffix){
  }
  return out;
 }
-function tvPick(levels,price,side){
- const eps=price*0.00005;
+function tvNear(levels,price,side,hug){
  const list=side==="sup"
-  ?levels.filter(x=>x.price<=price+eps).sort((a,b)=>b.price-a.price)
-  :levels.filter(x=>x.price>=price-eps).sort((a,b)=>a.price-b.price);
+  ?levels.filter(x=>x.price<price-hug).sort((a,b)=>b.price-a.price)
+  :levels.filter(x=>x.price>price+hug).sort((a,b)=>a.price-b.price);
  return list;
+}
+function tvAtLevel(levels,price,hug){
+ let hit=null;
+ for(const x of levels){
+  if(Math.abs(x.price-price)<hug&&(!hit||Math.abs(x.price-price)<Math.abs(hit.price-price))) hit=x;
+ }
+ return hit;
 }
 function tvLevels(data,suffix,price){
  if(!data||!price)return null;
@@ -71,25 +130,56 @@ function tvLevels(data,suffix,price){
  const extra=tvRead(data,TV_EXTRA,suffix);
  const all=[...classic,...extra];
  if(!all.length)return null;
- let support=tvPick(classic,price,"sup")[0]||tvPick(extra,price,"sup")[0]||null;
- let resistance=tvPick(classic,price,"res")[0]||tvPick(extra,price,"res")[0]||null;
- if(support&&resistance&&Math.abs(support.price-resistance.price)/price<0.0004){
-  resistance=tvPick(classic,price,"res").find(x=>x.price>support.price*1.0004)
-   ||tvPick(all,price,"res").find(x=>x.price>support.price*1.0004)
-   ||null;
- }
- if(!support&&!resistance)return null;
- const nextSupport=tvPick(all,price,"sup").find(x=>!support||x.price<support.price*0.9996)?.price??null;
- const nextResistance=tvPick(all,price,"res").find(x=>!resistance||x.price>resistance.price*1.0004)?.price??null;
+ const hug=price*0.0012;
+ const atLevel=tvAtLevel(classic.length?classic:all,price,hug);
+ const sups=tvNear(classic,price,"sup",hug);
+ const ress=tvNear(classic,price,"res",hug);
+ const support=sups[0]||tvNear(extra,price,"sup",hug)[0]||null;
+ const resistance=ress[0]||tvNear(extra,price,"res",hug)[0]||null;
+ if(!support&&!resistance&&!atLevel)return null;
  return {
   support:support?.price??null,
   resistance:resistance?.price??null,
   supportName:support?.name,
   resistanceName:resistance?.name,
-  nextSupport,
-  nextResistance,
+  nextSupport:sups[1]?.price??tvNear(all,price,"sup",hug).find(x=>!support||x.price<support.price*0.999)?.price??null,
+  nextResistance:ress[1]?.price??tvNear(all,price,"res",hug).find(x=>!resistance||x.price>resistance.price*1.001)?.price??null,
+  atLevel:atLevel?{price:atLevel.price,name:atLevel.name,source:"TradingView"}:null,
+  supportSource:support?"TradingView":null,
+  resistanceSource:resistance?"TradingView":null,
+  source:"TradingView",
   classic,
   extra
+ };
+}
+function tvSame(a,b,price){
+ if(!a||!b||!price)return false;
+ const s=a.support&&b.support&&Math.abs(a.support-b.support)/price<0.00025;
+ const r=a.resistance&&b.resistance&&Math.abs(a.resistance-b.resistance)/price<0.00025;
+ return !!(s&&r);
+}
+function pivotLevels(ohlc,price){
+ if(!ohlc||!price)return null;
+ const all=traditionalPivots(ohlc.h,ohlc.l,ohlc.c);
+ if(!all.length)return null;
+ const hug=price*0.0012;
+ const atLevel=tvAtLevel(all,price,hug);
+ const sups=tvNear(all,price,"sup",hug);
+ const ress=tvNear(all,price,"res",hug);
+ const support=sups[0]||null;
+ const resistance=ress[0]||null;
+ if(!support&&!resistance&&!atLevel)return null;
+ return {
+  support:support?.price??null,
+  resistance:resistance?.price??null,
+  supportName:support?.name,
+  resistanceName:resistance?.name,
+  nextSupport:sups[1]?.price??null,
+  nextResistance:ress[1]?.price??null,
+  atLevel:atLevel?{price:atLevel.price,name:atLevel.name,source:"TradingView"}:null,
+  supportSource:support?"TradingView":null,
+  resistanceSource:resistance?"TradingView":null,
+  source:"TradingView"
  };
 }
 const MARK="/assets/standx-mark.png";
@@ -174,6 +264,7 @@ function structureLevels(candles,price,tol=0.002){
  };
 }
 function srTitle(name,side){
+ if(name&&/^[SRP]\d*$/i.test(name)) return name;
  if(name&&/classic|camarilla|fibonacci|woodie|demark/i.test(name)) return name.replace(/^next\s+/i,"");
  if(/swing/i.test(name||"")) return side==="sup"?"Swing support":"Swing resistance";
  if(/range low/i.test(name||"")) return "Range low";
@@ -189,101 +280,6 @@ function mergeKlineState(prev,next){
  const out={...prev};
  for(const id of Object.keys(next||{})) out[id]=uniqBars([...(prev[id]||[]),...(next[id]||[])]);
  return out;
-}
-function pickSR(tv,bars,price,tf){
- if(!price)return {support:null,resistance:null,source:null,bars,tv};
- const cap=price*tf.maxDist;
- const hug=price*(tf.hug||0.002);
- const minSpan=price*(tf.minSpan||0.01);
- const allowCamarilla=tf.id==="60";
- const rank=name=>{
-  const n=(name||"").toLowerCase();
-  if(/classic s1$|classic r1$|classic middle/.test(n)) return 5;
-  if(n.includes("swing")) return 4;
-  if(n.includes("classic")) return 3;
-  if(n.includes("fibonacci")||n.includes("woodie")) return 2;
-  if(n.includes("range")) return 1;
-  if(n.includes("camarilla")) return allowCamarilla?1:0;
-  return 2;
- };
- const sups=[],ress=[];
- let atLevel=null;
- const push=(v,source,name)=>{
-  if(typeof v!=="number"||!Number.isFinite(v)||v<=0)return;
-  if(!allowCamarilla&&/camarilla/i.test(name||""))return;
-  if(Math.abs(v-price)<hug){
-   if(!atLevel||Math.abs(v-price)<Math.abs(atLevel.price-price)) atLevel={price:v,source,name};
-   return;
-  }
-  if(v<price){
-   if(price-v>cap)return;
-   sups.push({price:v,source,name,rank:rank(name)});
-  }else if(v>price){
-   if(v-price>cap)return;
-   ress.push({price:v,source,name,rank:rank(name)});
-  }
- };
- for(const x of tv?.classic||[]) push(x.price,"TradingView",x.name);
- for(const x of tv?.extra||[]) push(x.price,"TradingView",x.name);
- push(bars?.support,"StandX",`${bars?.supportTouches||1} swing touches`);
- push(bars?.resistance,"StandX",`${bars?.resistanceTouches||1} swing touches`);
- push(bars?.periodLow,"StandX","range low");
- push(bars?.periodHigh,"StandX","range high");
- const collapse=(arr,dir)=>{
-  arr.sort((a,b)=>dir==="sup"?b.price-a.price:a.price-b.price);
-  const out=[];
-  for(const x of arr){
-   const near=out.find(y=>Math.abs(y.price-x.price)/price<0.0025);
-   if(!near) out.push({...x});
-   else if(x.rank>near.rank){
-    near.source=x.source; near.name=x.name; near.rank=x.rank;
-   }else if(x.source==="TradingView"&&near.source!=="TradingView"&&x.rank>=near.rank){
-    near.source="TradingView"; near.name=x.name;
-   }
-  }
-  return out;
- };
- const sList=collapse(sups,"sup");
- const rList=collapse(ress,"res");
- const take=(list,dir)=>{
-  if(!list.length)return null;
-  const far=list.filter(x=>Math.abs(price-x.price)>=hug);
-  const pool=far.length?far:list;
-  const primary=pool.filter(x=>x.rank>=3);
-  const use=primary.length?primary:pool;
-  return [...use].sort((a,b)=>b.rank-a.rank||(dir==="sup"?b.price-a.price:a.price-b.price))[0]||null;
- };
- let support=take(sList,"sup");
- let resistance=take(rList,"res");
- if(support&&resistance){
-  for(let i=0;i<6&&resistance.price-support.price<minSpan;i++){
-   const dS=price-support.price, dR=resistance.price-price;
-   if(dR<=dS){
-    const nxt=rList.find(x=>x.price>resistance.price*1.0015);
-    if(!nxt)break;
-    resistance=nxt;
-   }else{
-    const nxt=sList.find(x=>x.price<support.price*0.9985);
-    if(!nxt)break;
-    support=nxt;
-   }
-  }
- }
- const usedTv=support?.source==="TradingView"||resistance?.source==="TradingView";
- return {
-  support:support?.price??null,
-  resistance:resistance?.price??null,
-  supportName:support?.name,
-  resistanceName:resistance?.name,
-  supportSource:support?.source||null,
-  resistanceSource:resistance?.source||null,
-  nextSupport:sList.find(x=>support&&x.price<support.price*0.998)?.price??null,
-  nextResistance:rList.find(x=>resistance&&x.price>resistance.price*1.002)?.price??null,
-  atLevel,
-  source:usedTv?"TradingView":(support||resistance)?"StandX":null,
-  bars,
-  tv
- };
 }
 function alignWall(level,wall,price){
  if(!level||!wall?.price||!price)return false;
@@ -453,23 +449,29 @@ function doctorTake({side,leverage,odds,price,support,resistance,funding,changeP
  return {risk,sit,action,idea};
 }
 
+function logFit(v,p50,p90){
+ const x=Math.log10(Math.max(Number(v)||0,1));
+ const a=Math.log10(p50), b=Math.log10(p90);
+ return Math.max(0,Math.min(100,50+(x-a)/(b-a)*40));
+}
 function health(m,d){
- const vol=Math.min(100,Math.log10(Number(m?.volume_quote_24h||m?.volume_24h||0)+1)*16);
- const oi=Math.min(100,Math.log10(Number(m?.open_interest_notional||m?.open_interest||0)+1)*18);
- const mid=Number(d?.mid||m?.last_price||0), spread=Number(d?.spread||0);
- const sp=mid?Math.max(0,100-(spread/mid)*100000):60;
- const fund=Math.max(0,100-Math.abs(Number(m?.funding_rate||0))*100000);
- const liq=d?Math.min(100,Math.log10((d.bidUsd+d.askUsd)+1)*14):55;
- return Math.round(vol*.25+oi*.15+sp*.2+fund*.15+liq*.25);
+ const vol=logFit(m?.volume_quote_24h||m?.volume_24h,15e6,400e6);
+ const oi=logFit(m?.open_interest_notional||m?.open_interest,8e6,250e6);
+ const mid=Number(d?.mid||m?.last_price||0);
+ const bps=mid&&d?.spread!=null?Number(d.spread)/mid*10000:2;
+ const sp=Math.max(0,Math.min(100,100-bps*10));
+ const fund=Math.max(0,Math.min(100,100-Math.abs(Number(m?.funding_rate||0))*10000*8));
+ const book=d?logFit(d.bidUsd+d.askUsd,5e4,2e6):50;
+ return Math.round(vol*.25+oi*.15+sp*.2+fund*.15+book*.25);
 }
 function Metric({name,value}){return <div className="metric"><span>{name}</span><b>{Math.round(value)}</b><div><i style={{width:`${Math.max(0,Math.min(100,value))}%`}}/></div></div>}
 function App(){
- const [overview,setOverview]=useState(null),[symbol,setSymbol]=useState(""),[detail,setDetail]=useState(null),[loading,setLoading]=useState(true),[err,setErr]=useState(""),[liq,setLiq]=useState(0),[search,setSearch]=useState(""),[share,setShare]=useState(false),[side,setSide]=useState("long"),[leverage,setLeverage]=useState(10),[sizeInput,setSizeInput]=useState("1000"),[entryInput,setEntryInput]=useState(""),[tf,setTf]=useState("240"),[klines,setKlines]=useState({}),[tvQuote,setTvQuote]=useState(null),[plan,setPlan]=useState(null);
+ const [overview,setOverview]=useState(null),[symbol,setSymbol]=useState(""),[detail,setDetail]=useState(null),[loading,setLoading]=useState(true),[err,setErr]=useState(""),[liq,setLiq]=useState(0),[search,setSearch]=useState(""),[share,setShare]=useState(false),[side,setSide]=useState("long"),[leverage,setLeverage]=useState(10),[sizeInput,setSizeInput]=useState("1000"),[entryInput,setEntryInput]=useState(""),[tf,setTf]=useState("4H"),[klines,setKlines]=useState({}),[tvQuote,setTvQuote]=useState(null),[pivotOhlc,setPivotOhlc]=useState({}),[plan,setPlan]=useState(null);
  const symbolRef=useRef("");
  const prevSymbolRef=useRef("");
  const klineAtRef=useRef(0);
  const selectedHold=useRef(null);
- const cacheRef=useRef({klines:{},tv:{},detail:{}});
+ const cacheRef=useRef({klines:{},tv:{},detail:{},pivots:{}});
  const reqRef=useRef(0);
  const [klinesSym,setKlinesSym]=useState("");
  async function getOverview(){
@@ -483,6 +485,19 @@ function App(){
   const data=await r.json();
   if(!data||data.code||typeof data.close!=="number")return null;
   return {ticker,data};
+ }
+ async function getPivots(s){
+  const src=ohlcSource(s);
+  if(!src)return {};
+  const pairs=await Promise.all(PIVOT_TFS.map(async t=>{
+   const interval=src.kind==="yahoo"?t.yahoo:src.kind==="mexc"?t.mexc:t.binance;
+   try{
+    const r=await fetch(ohlcUrl(src.kind,src.symbol,interval),{cache:"no-store"});
+    if(!r.ok)return [t.id,null];
+    return [t.id,parsePrevOhlc(await r.json())];
+   }catch{return [t.id,null];}
+  }));
+  return Object.fromEntries(pairs);
  }
  async function getKlines(s,tf,pages){
   const to=Math.floor(Date.now()/1000);
@@ -555,7 +570,7 @@ function App(){
     }
     if(current&&Date.now()-klineAtRef.current>20000){
      klineAtRef.current=Date.now();
-     const [bars,tv]=await Promise.all([loadAllKlines(current,true),getTv(current)]);
+     const [bars,tv,piv]=await Promise.all([loadAllKlines(current,true),getTv(current),getPivots(current)]);
      if(!stop&&symbolRef.current===current){
       setKlines(prev=>{
        const merged=mergeKlineState(prev,bars);
@@ -564,6 +579,7 @@ function App(){
       });
       setKlinesSym(current);
       if(tv){cacheRef.current.tv[current]=tv;setTvQuote(tv);}
+      if(piv){cacheRef.current.pivots[current]=piv;setPivotOhlc(piv);}
      }
     }
    }catch{}
@@ -587,6 +603,7 @@ function App(){
    else setKlinesSym("");
    if(cache.tv[symbol])setTvQuote(cache.tv[symbol]);
    if(cache.detail[symbol])setDetail(cache.detail[symbol]);
+   if(cache.pivots[symbol])setPivotOhlc(cache.pivots[symbol]);
   }
   const req=++reqRef.current;
   let stop=false;
@@ -618,6 +635,11 @@ function App(){
    cache.tv[symbol]=tv;
    setTvQuote(tv);
   }).catch(()=>{});
+  getPivots(symbol).then(piv=>{
+   if(stop||req!==reqRef.current||!piv)return;
+   cache.pivots[symbol]=piv;
+   setPivotOhlc(piv);
+  }).catch(()=>{});
   return()=>{stop=true};
  },[symbol]);
  const liveDetail=detail?.a?.symbol===symbol?detail:null;
@@ -629,12 +651,14 @@ function App(){
  const filtered=(overview?.symbols||[]).filter(x=>x.symbol.toLowerCase().includes(search.toLowerCase())||x.base?.toLowerCase().includes(search.toLowerCase()));
  const signals=useMemo(()=>{
   const m=selected,d=liveDetail?.b;
+  const mid=Number(d?.mid||m?.last_price||0);
+  const bps=mid&&d?.spread!=null?Number(d.spread)/mid*10000:2;
   return {
-   liquidity:d?Math.min(100,Math.log10(d.bidUsd+d.askUsd+1)*14):55,
-   volume:Math.min(100,Math.log10(Number(m?.volume_quote_24h||m?.volume_24h||0)+1)*16),
-   oi:Math.min(100,Math.log10(Number(m?.open_interest_notional||m?.open_interest||0)+1)*18),
-   spread:d&&d.mid?Math.max(0,100-(d.spread/d.mid)*100000):60,
-   funding:Math.max(0,100-Math.abs(Number(m?.funding_rate||0))*100000)
+   liquidity:d?logFit(d.bidUsd+d.askUsd,5e4,2e6):50,
+   volume:logFit(m?.volume_quote_24h||m?.volume_24h,15e6,400e6),
+   oi:logFit(m?.open_interest_notional||m?.open_interest,8e6,250e6),
+   spread:Math.max(0,Math.min(100,100-bps*10)),
+   funding:Math.max(0,Math.min(100,100-Math.abs(Number(m?.funding_rate||0))*10000*8))
   }
  },[selected,liveDetail]);
  const market={...selected,...(liveDetail?.a||{})};
@@ -642,32 +666,26 @@ function App(){
  const price=Number(market.mark_price||market.last_price||book?.mid||0);
  const bidWall=clusterWall(book?.bids,price,"bid");
  const askWall=clusterWall(book?.asks,price,"ask");
- const tfMeta=TFS.find(t=>t.id===tf)||TFS[1];
- const tvOk=tvQuote&&TV_MAP[symbol]===tvQuote.ticker;
- const klinesOk=klinesSym===symbol;
+ const tfMeta=PIVOT_TFS.find(t=>t.id===tf)||PIVOT_TFS[1];
  const tfMap=useMemo(()=>{
+  const empty={support:null,resistance:null,source:null};
   const out={};
-  for(const t of TFS){
-   const fromTv=tvOk?tvLevels(tvQuote?.data,TV_TF[t.id],price):null;
-   const fromBars=klinesOk?structureLevels(klines[t.id],price,t.tol):null;
-   out[t.id]=pickSR(fromTv,fromBars,price,t);
-  }
+  for(const t of PIVOT_TFS) out[t.id]=pivotLevels(pivotOhlc?.[t.id],price)||empty;
   return out;
- },[klines,klinesOk,price,tvQuote,tvOk]);
+ },[price,pivotOhlc]);
  const structured=tfMap[tf];
  const dayLow=Number(market.low_price_24h||0), dayHigh=Number(market.high_price_24h||0);
- const support=structured?.support||(bidWall?.price<price?bidWall.price:null)||(dayLow&&dayLow<price?dayLow:null)||null;
- const resistanceLevel=structured?.resistance||(askWall?.price>price?askWall.price:null)||(dayHigh&&dayHigh>price?dayHigh:null)||null;
- const low=structured?.bars?.periodLow||dayLow;
- const high=structured?.bars?.periodHigh||dayHigh;
+ const support=structured?.support||null;
+ const resistanceLevel=structured?.resistance||null;
+ const low=dayLow;
+ const high=dayHigh;
  const bookConfirmsSupport=alignWall(support,bidWall,price);
  const bookConfirmsRes=alignWall(resistanceLevel,askWall,price);
- const srSource=structured?.source;
- const srSupportNote=structured?.supportSource
-  ?`StandX ${structured.supportName||"pivot"}`
+ const srSupportNote=structured?.supportName
+  ?srTitle(structured.supportName,"sup")
   :"Waiting for levels";
- const srResNote=structured?.resistanceSource
-  ?`StandX ${structured.resistanceName||"pivot"}`
+ const srResNote=structured?.resistanceName
+  ?srTitle(structured.resistanceName,"res")
   :"Waiting for levels";
  const typed=Number(entryInput);
  const draftEntry=typed>0?typed:price;
@@ -714,9 +732,8 @@ function App(){
   funding:market.funding_rate,changePct:Number(market.price_change_pct||0),score,
   vsStatus:vs?.status,pnlPct
  }):null;
- const h1=tfMap["60"], h4=tfMap["240"];
- const vs1h=plan?liqVsLevels({side:plan.side,liq:plan.liq,support:h1?.support,resistance:h1?.resistance,supportName:h1?.supportName,resistanceName:h1?.resistanceName,tfLabel:"1H"}):null;
- const vs4h=plan?liqVsLevels({side:plan.side,liq:plan.liq,support:h4?.support,resistance:h4?.resistance,supportName:h4?.supportName,resistanceName:h4?.resistanceName,tfLabel:"4H"}):null;
+ const vs1h=plan?liqVsLevels({side:plan.side,liq:plan.liq,support:tfMap["1H"]?.support,resistance:tfMap["1H"]?.resistance,supportName:tfMap["1H"]?.supportName,resistanceName:tfMap["1H"]?.resistanceName,tfLabel:"1H"}):null;
+ const vs4h=plan?liqVsLevels({side:plan.side,liq:plan.liq,support:tfMap["4H"]?.support,resistance:tfMap["4H"]?.resistance,supportName:tfMap["4H"]?.supportName,resistanceName:tfMap["4H"]?.resistanceName,tfLabel:"4H"}):null;
  const mascotPose=status==="HEALTHY"?"formal":"think";
  const span=resistanceLevel&&support?resistanceLevel-support:0;
  const pricePos=span?Math.max(4,Math.min(96,(price-support)/span*100)):50;
@@ -755,7 +772,7 @@ function App(){
      <div className="shareSignals">{[["Liquidity",signals.liquidity],["Volume",signals.volume],["Open Interest",signals.oi],["Spread",signals.spread],["Funding",signals.funding]].map(([x,v])=><div key={x}><span>{x}</span><b>{Math.round(v)}</b></div>)}</div>
      <div className="shareLevels"><div><span>MARK</span><b>{px(price)}</b></div><div><span>ENTRY</span><b>{px(entry)}</b></div><div><span>LIQ PRICE</span><b>{plan?px(liqPx):"—"}</b></div><div><span>LIQ CHANCE</span><b>{odds??"—"}%</b></div></div>
      <div className="shareTf">
-       {[["1H",h1,vs1h],["4H",h4,vs4h]].map(([lab,lv,cmp])=><div key={lab}>
+       {[["1H",tfMap["1H"],vs1h],["4H",tfMap["4H"],vs4h]].map(([lab,lv,cmp])=><div key={lab}>
          <span>{lab} STATUS</span>
          {lv?.atLevel&&<small>Testing {srTitle(lv.atLevel.name,"sup")} · {px(lv.atLevel.price)}</small>}
          <b>{srTitle(lv?.supportName,"sup")} {px(lv?.support)}</b>
@@ -805,7 +822,7 @@ return <main>
           <div>
             <div className="label">OPEN TRADE DESK</div>
             <h3>If you open this now</h3>
-            <p>Enter the trade, then calculate. Liquidation is for that fill, not live mark drift. StandX 1H / 4H / daily / weekly support and resistance. {DISCLAIMER}.</p>
+            <p>Enter the trade, then calculate. Liquidation is for that fill, not live mark drift. Traditional pivots from the previous 1H / 4H / daily / weekly candle — same formula as TradingView Pivot Points Standard. {DISCLAIMER}.</p>
           </div>
           <Stander pose={odds>=45?"think":"focus"} className="standerDesk"/>
         </div>
@@ -858,10 +875,10 @@ return <main>
           <small>{vs.detail}</small>
         </div>}
         <div className="tfRow">
-          {TFS.map(t=><button type="button" key={t.id} className={tf===t.id?"on":""} onClick={()=>setTf(t.id)}>{t.label}</button>)}
+          {PIVOT_TFS.map(t=><button type="button" key={t.id} className={tf===t.id?"on":""} onClick={()=>setTf(t.id)}>{t.label}</button>)}
         </div>
         {structured?.atLevel&&<p className="atLevel">Price is testing {srTitle(structured.atLevel.name,"sup")} at {px(structured.atLevel.price)} — that is mark, not support.</p>}
-        <div className={`levels ${klinesOk?"":"pending"}`}>
+        <div className={`levels ${support||resistanceLevel?"":"pending"}`}>
           <div>
             <span>{tfMeta.label} · {srTitle(structured?.supportName,"sup").toUpperCase()}</span>
             <b>{px(support)}</b>
@@ -882,10 +899,10 @@ return <main>
           </div>
         </div>
         <div className="tfGrid">
-          {TFS.map(t=>{
+          {PIVOT_TFS.map(t=>{
            const lv=tfMap[t.id];
            return <button type="button" key={t.id} className={tf===t.id?"on":""} onClick={()=>setTf(t.id)}>
-             <span>{t.label} · StandX</span>
+             <span>{t.label} · {t.hint}</span>
              <b><i>{srTitle(lv?.supportName,"sup")}</i> {px(lv?.support)}</b>
              <b><i>{srTitle(lv?.resistanceName,"res")}</i> {px(lv?.resistance)}</b>
            </button>;
