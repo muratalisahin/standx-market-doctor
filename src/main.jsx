@@ -655,6 +655,8 @@ function App(){
  const mascotPose=status==="HEALTHY"?"formal":"think";
  const span=resistanceLevel&&support?resistanceLevel-support:0;
  const pricePos=span?Math.max(4,Math.min(96,(price-support)/span*100)):50;
+ const entryPos=span&&plan?.entry?Math.max(4,Math.min(96,(plan.entry-support)/span*100)):null;
+ const tickPos=entryPos??pricePos;
  const liqPos=span&&plan?.liq!=null?Math.max(-8,Math.min(108,(plan.liq-support)/span*100)):null;
  function ShareCard({m,score,status,signals,onClose}){
  const shotRef=useRef(null);
@@ -825,10 +827,10 @@ return <main>
         </div>
         <div className="srBar" aria-hidden="true">
           <i className="srFill" style={{width:`${pricePos}%`}}/>
-          <em style={{left:`${pricePos}%`}}/>
+          <em className={plan?"srEntry":""} style={{left:`${tickPos}%`}}/>
           {liqPos!=null&&<u className="srLiq" style={{left:`${liqPos}%`}}/>}
           <span className="srL">Support</span>
-          <span className="srM">Price</span>
+          <span className="srM" style={{left:`${Math.max(16,Math.min(84,tickPos))}%`}}>{plan?"Giriş fiyatınız bu":"Price"}</span>
           <span className="srR">Resistance</span>
           {liqPos!=null&&<span className="srLiqLab" style={{left:`${Math.max(8,Math.min(92,liqPos))}%`}}>Liq</span>}
         </div>

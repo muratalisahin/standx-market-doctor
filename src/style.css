@@ -95,16 +95,18 @@
 .srBar{position:relative;height:10px;background:#edf0ed;border-radius:99px;margin:18px 0 28px;overflow:visible}
 .srFill{display:block;height:100%;background:linear-gradient(90deg,#31d66d,#d34d55);border-radius:99px}
 .srBar em{position:absolute;top:-5px;width:8px;height:20px;margin-left:-4px;background:#101511;border-radius:99px}
+.srBar em.srEntry{background:#fff;box-shadow:0 0 0 2px #101511;width:9px;height:22px;top:-6px;margin-left:-4.5px}
 .srBar u.srLiq{position:absolute;top:-7px;width:6px;height:24px;margin-left:-3px;background:#d34d55;border-radius:99px;text-decoration:none}
 .srL,.srM,.srR,.srLiqLab{position:absolute;top:16px;font-size:9px;letter-spacing:.1em;color:#8a928c;font-weight:800;text-transform:uppercase}
-.srL{left:0}.srM{left:50%;transform:translateX(-50%)}.srR{right:0}
+.srL{left:0}.srM{left:50%;transform:translateX(-50%);white-space:nowrap;letter-spacing:.04em}.srR{right:0}
 .srLiqLab{color:#d34d55;transform:translateX(-50%)}
 .take{background:#101511;color:#e8f0ea;border-radius:16px;padding:16px 18px}
 .takeHead{display:flex;align-items:center;gap:10px;margin-bottom:2px}
-.takeHead img{height:18px;width:auto;object-fit:contain}
-.take .takeHead img,.calcResult .takeHead img{filter:brightness(0) invert(1)}
+.takeHead img{height:22px;width:auto;max-width:118px;object-fit:contain;flex:none}
+.take .takeHead img,.calcResult .takeHead img{filter:none;mix-blend-mode:screen}
+.take .takeHead small{display:block}
 .shareNote .takeHead{margin-bottom:6px}
-.shareNote .takeHead img{filter:none;max-height:18px}
+.shareNote .takeHead img{filter:none;mix-blend-mode:normal;max-height:22px;background:#101511;border-radius:4px;padding:2px 6px}
 .take small,.calcResult .takeHead span{color:#8aa08f;font-size:9px;letter-spacing:.12em;font-weight:800}
 .take p{color:#d5e0d8!important;margin:8px 0 0;font-size:13px!important;line-height:1.55}
 .take p b{color:#31d66d;letter-spacing:.06em}
